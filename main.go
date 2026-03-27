@@ -81,6 +81,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Correlator cleanup runs regardless of auth log availability,
+	// because Collect() parks pending sessions even without auth log.
+	go sshCollector.RunCleanup(ctx)
+
 	// Auth log watcher (optional — continue without it if unavailable).
 	resolvedAuthLogPath, ok := resolveAuthLogPath(*authLogPath, flagWasExplicitlySet("auth-log.path"), defaultAuthLogCandidates, authLogExists)
 	var authWatcher *authlog.FileWatcher
@@ -100,7 +104,6 @@ func main() {
 				"path", resolvedAuthLogPath, "error", err)
 		} else {
 			go sshCollector.Run(ctx, authWatcher.Events())
-			go sshCollector.RunCleanup(ctx)
 			logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
 		}
 	}
