@@ -8,43 +8,34 @@ import (
 	"github.com/yuuki/ssh_sesshon_exporter/utmp"
 )
 
-// TrackedSession holds information about a tracked session.
-type TrackedSession struct {
-	User      string
-	RemoteIP  string
-	TTY       string
-	LoginTime time.Time
-}
-
 // EndedSession represents a session that has ended.
 type EndedSession struct {
-	TrackedSession
+	utmp.Session
 	Duration time.Duration
 }
 
 // SessionDelta represents changes between two utmp snapshots.
 type SessionDelta struct {
-	NewSessions   []TrackedSession
+	NewSessions   []utmp.Session
 	EndedSessions []EndedSession
 }
 
-// sessionKey uniquely identifies a session.
-func sessionKey(user, tty string) string {
-	return user + ":" + tty
+type sessionKey struct {
+	user string
+	tty  string
 }
 
 // Tracker tracks SSH session lifecycles by diffing utmp snapshots.
 type Tracker struct {
 	mu     sync.Mutex
-	active map[string]TrackedSession // key: "user:tty"
-	now    func() time.Time         // for testing
+	active map[sessionKey]utmp.Session
+	now    func() time.Time // for testing
 	logger *slog.Logger
 }
 
-// New creates a new Tracker.
 func New(logger *slog.Logger) *Tracker {
 	return &Tracker{
-		active: make(map[string]TrackedSession),
+		active: make(map[sessionKey]utmp.Session),
 		now:    time.Now,
 		logger: logger,
 	}
@@ -59,11 +50,9 @@ func (t *Tracker) UpdateSessions(current []utmp.Session) SessionDelta {
 	now := t.now()
 	var delta SessionDelta
 
-	// Build set of current session keys.
-	currentSet := make(map[string]utmp.Session, len(current))
+	currentSet := make(map[sessionKey]utmp.Session, len(current))
 	for _, s := range current {
-		key := sessionKey(s.User, s.TTY)
-		currentSet[key] = s
+		currentSet[sessionKey{s.User, s.TTY}] = s
 	}
 
 	// Detect ended sessions (in active but not in current).
@@ -71,13 +60,13 @@ func (t *Tracker) UpdateSessions(current []utmp.Session) SessionDelta {
 		if _, exists := currentSet[key]; !exists {
 			duration := now.Sub(tracked.LoginTime)
 			delta.EndedSessions = append(delta.EndedSessions, EndedSession{
-				TrackedSession: tracked,
-				Duration:       duration,
+				Session:  tracked,
+				Duration: duration,
 			})
 			delete(t.active, key)
 			t.logger.Debug("session ended",
 				"user", tracked.User,
-				"remote_ip", tracked.RemoteIP,
+				"remote_ip", tracked.Host,
 				"tty", tracked.TTY,
 				"duration", duration,
 			)
@@ -87,14 +76,8 @@ func (t *Tracker) UpdateSessions(current []utmp.Session) SessionDelta {
 	// Detect new sessions (in current but not in active).
 	for key, s := range currentSet {
 		if _, exists := t.active[key]; !exists {
-			tracked := TrackedSession{
-				User:      s.User,
-				RemoteIP:  s.Host,
-				TTY:       s.TTY,
-				LoginTime: s.LoginTime,
-			}
-			t.active[key] = tracked
-			delta.NewSessions = append(delta.NewSessions, tracked)
+			t.active[key] = s
+			delta.NewSessions = append(delta.NewSessions, s)
 			t.logger.Debug("session started",
 				"user", s.User,
 				"remote_ip", s.Host,
@@ -106,7 +89,6 @@ func (t *Tracker) UpdateSessions(current []utmp.Session) SessionDelta {
 	return delta
 }
 
-// ActiveCount returns the number of currently tracked sessions.
 func (t *Tracker) ActiveCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
