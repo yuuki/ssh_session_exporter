@@ -62,6 +62,15 @@ func TestParseLine(t *testing.T) {
 			wantMeth: "password",
 			wantPID:  1234,
 		},
+		{
+			name:     "failed keyboard-interactive/pam",
+			line:     `Jan  1 12:00:00 server sshd[1234]: Failed keyboard-interactive/pam for alice from 10.0.0.1 port 22 ssh2`,
+			wantType: EventAuthFailure,
+			wantUser: "alice",
+			wantIP:   "10.0.0.1",
+			wantMeth: "keyboard-interactive/pam",
+			wantPID:  1234,
+		},
 		// --- EventAuthSuccess ---
 		{
 			name:     "accepted password",
@@ -89,6 +98,15 @@ func TestParseLine(t *testing.T) {
 			wantIP:   "10.0.0.1",
 			wantMeth: "keyboard-interactive",
 			wantPID:  2003,
+		},
+		{
+			name:     "accepted keyboard-interactive/pam",
+			line:     `Jan  1 12:00:00 server sshd[2004]: Accepted keyboard-interactive/pam for carol from 10.0.0.1 port 22 ssh2`,
+			wantType: EventAuthSuccess,
+			wantUser: "carol",
+			wantIP:   "10.0.0.1",
+			wantMeth: "keyboard-interactive/pam",
+			wantPID:  2004,
 		},
 		// --- EventInvalidUser ---
 		{

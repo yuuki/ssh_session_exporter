@@ -9,13 +9,14 @@ import (
 
 var (
 	// "Failed password for user from 192.168.1.1 port 22 ssh2"
-	// "Failed password for invalid user admin from 192.168.1.1 port 22 ssh2"
+	// "Failed keyboard-interactive/pam for user from 192.168.1.1 port 22 ssh2"
 	reFailedAuth = regexp.MustCompile(
-		`sshd\[(\d+)\]: Failed ([\w-]+) for (?:invalid user )?(\S+) from (\S+) port (\d+)`,
+		`sshd\[(\d+)\]: Failed ([\w-]+(?:/\w+)*) for (?:invalid user )?(\S+) from (\S+) port (\d+)`,
 	)
 	// "Accepted publickey for alice from 192.168.1.10 port 54321 ssh2"
+	// "Accepted keyboard-interactive/pam for alice from 192.168.1.10 port 22 ssh2"
 	reAcceptedAuth = regexp.MustCompile(
-		`sshd\[(\d+)\]: Accepted ([\w-]+) for (\S+) from (\S+) port (\d+)`,
+		`sshd\[(\d+)\]: Accepted ([\w-]+(?:/\w+)*) for (\S+) from (\S+) port (\d+)`,
 	)
 	// "Invalid user admin from 10.0.0.5 port 22"
 	reInvalidUser = regexp.MustCompile(
