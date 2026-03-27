@@ -100,6 +100,7 @@ func main() {
 				"path", resolvedAuthLogPath, "error", err)
 		} else {
 			go sshCollector.Run(ctx, authWatcher.Events())
+			go sshCollector.RunCleanup(ctx)
 			logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
 		}
 	}

@@ -208,3 +208,281 @@ ssh_auth_failures_total{method="password",remote_ip="10.0.0.99",user="admin"} 2
 		t.Errorf("unexpected metrics:\n%v", err)
 	}
 }
+
+func TestRun_AuthSuccess(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	events := make(chan authlog.AuthEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx, events)
+
+	events <- authlog.AuthEvent{
+		Type:     authlog.EventAuthSuccess,
+		User:     "alice",
+		RemoteIP: "192.168.1.10",
+		Method:   "publickey",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	expected := `
+# HELP ssh_auth_success_total Total number of successful SSH authentications.
+# TYPE ssh_auth_success_total counter
+ssh_auth_success_total{method="publickey",remote_ip="192.168.1.10",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_auth_success_total"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestRun_InvalidUser(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	events := make(chan authlog.AuthEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx, events)
+
+	events <- authlog.AuthEvent{
+		Type:     authlog.EventInvalidUser,
+		User:     "hacker",
+		RemoteIP: "10.0.0.99",
+	}
+	events <- authlog.AuthEvent{
+		Type:     authlog.EventInvalidUser,
+		User:     "hacker",
+		RemoteIP: "10.0.0.99",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	expected := `
+# HELP ssh_invalid_user_attempts_total Total number of SSH authentication attempts for invalid users.
+# TYPE ssh_invalid_user_attempts_total counter
+ssh_invalid_user_attempts_total{remote_ip="10.0.0.99",user="hacker"} 2
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_invalid_user_attempts_total"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestRun_PreauthDisconnect(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	events := make(chan authlog.AuthEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx, events)
+
+	events <- authlog.AuthEvent{
+		Type:     authlog.EventPreauthDisconnect,
+		User:     "root",
+		RemoteIP: "10.0.0.1",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	expected := `
+# HELP ssh_preauth_disconnects_total Total number of SSH disconnections before authentication completed.
+# TYPE ssh_preauth_disconnects_total counter
+ssh_preauth_disconnects_total{remote_ip="10.0.0.1",user="root"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_preauth_disconnects_total"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestRun_AuthAttemptsBeforeSuccess(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	events := make(chan authlog.AuthEvent, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx, events)
+
+	// Two failures followed by a success for the same PID.
+	events <- authlog.AuthEvent{
+		Type: authlog.EventAuthFailure, PID: 7001,
+		User: "alice", RemoteIP: "192.168.1.10", Method: "password",
+	}
+	events <- authlog.AuthEvent{
+		Type: authlog.EventAuthFailure, PID: 7001,
+		User: "alice", RemoteIP: "192.168.1.10", Method: "password",
+	}
+	events <- authlog.AuthEvent{
+		Type: authlog.EventAuthSuccess, PID: 7001,
+		User: "alice", RemoteIP: "192.168.1.10", Method: "password",
+		Timestamp: time.Now(),
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	expected := `
+# HELP ssh_auth_attempts_before_success Number of failed authentication attempts before a successful login.
+# TYPE ssh_auth_attempts_before_success histogram
+ssh_auth_attempts_before_success_bucket{user="alice",le="0"} 0
+ssh_auth_attempts_before_success_bucket{user="alice",le="1"} 0
+ssh_auth_attempts_before_success_bucket{user="alice",le="2"} 1
+ssh_auth_attempts_before_success_bucket{user="alice",le="3"} 1
+ssh_auth_attempts_before_success_bucket{user="alice",le="5"} 1
+ssh_auth_attempts_before_success_bucket{user="alice",le="10"} 1
+ssh_auth_attempts_before_success_bucket{user="alice",le="+Inf"} 1
+ssh_auth_attempts_before_success_sum{user="alice"} 2
+ssh_auth_attempts_before_success_count{user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_auth_attempts_before_success"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestCollect_LoginSetupSeconds(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Now()
+	acceptTime := now.Add(-2 * time.Second) // auth accepted 2 seconds ago
+
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Simulate: auth success event was recorded with PID 8001.
+	c.correlator.RecordAccept(8001, acceptTime)
+
+	// New session appears in utmp with same PID.
+	reader.sessions = []utmp.Session{
+		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now, PID: 8001},
+	}
+
+	ch := make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	// The login setup duration should be approximately 2 seconds.
+	expected := `
+# HELP ssh_login_setup_seconds Time from authentication success to session appearing in utmp.
+# TYPE ssh_login_setup_seconds histogram
+ssh_login_setup_seconds_bucket{user="alice",le="0.1"} 0
+ssh_login_setup_seconds_bucket{user="alice",le="0.5"} 0
+ssh_login_setup_seconds_bucket{user="alice",le="1"} 0
+ssh_login_setup_seconds_bucket{user="alice",le="2"} 1
+ssh_login_setup_seconds_bucket{user="alice",le="5"} 1
+ssh_login_setup_seconds_bucket{user="alice",le="10"} 1
+ssh_login_setup_seconds_bucket{user="alice",le="30"} 1
+ssh_login_setup_seconds_bucket{user="alice",le="+Inf"} 1
+ssh_login_setup_seconds_sum{user="alice"} 2
+ssh_login_setup_seconds_count{user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_login_setup_seconds"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestCollect_ShortSessions(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Now()
+	// Session started 10 seconds ago (well within 30s threshold).
+	sessions := []utmp.Session{
+		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now.Add(-10 * time.Second)},
+	}
+	reader := &mockReader{sessions: sessions}
+	tracker := sessiontracker.New(slog.Default())
+	tracker.Initialize(sessions)
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// First scrape: session is active.
+	ch := make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	// Session ends.
+	reader.sessions = nil
+	ch = make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	expected := `
+# HELP ssh_short_sessions_total Total number of SSH sessions that ended within 30 seconds.
+# TYPE ssh_short_sessions_total counter
+ssh_short_sessions_total{remote_ip="192.168.1.10",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_short_sessions_total"); err != nil {
+		t.Errorf("unexpected metrics:\n%v", err)
+	}
+}
+
+func TestCollect_LongSessionNotShort(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Now()
+	// Session started 5 minutes ago (well beyond 30s threshold).
+	sessions := []utmp.Session{
+		{User: "bob", TTY: "pts/1", Host: "10.0.0.5", LoginTime: now.Add(-5 * time.Minute)},
+	}
+	reader := &mockReader{sessions: sessions}
+	tracker := sessiontracker.New(slog.Default())
+	tracker.Initialize(sessions)
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// First scrape: session is active.
+	ch := make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	// Session ends.
+	reader.sessions = nil
+	ch = make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	// ssh_short_sessions_total should have no entries for bob.
+	expected := `
+# HELP ssh_short_sessions_total Total number of SSH sessions that ended within 30 seconds.
+# TYPE ssh_short_sessions_total counter
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_short_sessions_total"); err != nil {
+		t.Errorf("long session was incorrectly counted as short:\n%v", err)
+	}
+}
