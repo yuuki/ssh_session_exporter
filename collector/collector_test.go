@@ -381,10 +381,10 @@ func TestCollect_LoginSetupSeconds(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Simulate: auth success event was recorded with PID 8001.
-	c.correlator.RecordAccept(8001, acceptTime)
+	// Simulate: auth success event recorded (PID differs from utmp PID).
+	c.correlator.RecordAccept(5555, "alice", "192.168.1.10", acceptTime)
 
-	// New session appears in utmp with same PID.
+	// New session appears in utmp with a DIFFERENT PID (real-world scenario).
 	reader.sessions = []utmp.Session{
 		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now, PID: 8001},
 	}
@@ -444,7 +444,7 @@ func TestCollect_LoginSetupSessionFirst(t *testing.T) {
 
 	events <- authlog.AuthEvent{
 		Type:      authlog.EventAuthSuccess,
-		PID:       9001,
+		PID:       5555, // different PID from utmp
 		User:      "alice",
 		RemoteIP:  "192.168.1.10",
 		Method:    "publickey",

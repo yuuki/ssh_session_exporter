@@ -41,7 +41,7 @@ type SSHCollector struct {
 	utmpReader         utmp.Reader
 	tracker            *sessiontracker.Tracker
 	logger             *slog.Logger
-	correlator         *pidCorrelator
+	correlator         *sessionCorrelator
 	authFailures       *prometheus.CounterVec
 	authSuccesses      *prometheus.CounterVec
 	invalidUsers       *prometheus.CounterVec
@@ -118,7 +118,7 @@ func New(
 		utmpReader:         utmpReader,
 		tracker:            tracker,
 		logger:             logger,
-		correlator:         newPIDCorrelator(correlatorTTL),
+		correlator:         newSessionCorrelator(correlatorTTL),
 		authFailures:       authFailures,
 		authSuccesses:      authSuccesses,
 		invalidUsers:       invalidUsers,
@@ -166,14 +166,14 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for _, newS := range delta.NewSessions {
 		c.connections.WithLabelValues(newS.User, newS.Host).Inc()
-		if acceptTime, ok := c.correlator.ConsumeAccept(newS.PID); ok {
+		if acceptTime, ok := c.correlator.ConsumeAccept(newS.User, newS.Host); ok {
 			setupDuration := newS.LoginTime.Sub(acceptTime)
 			if setupDuration >= 0 {
 				c.loginSetup.WithLabelValues(newS.User).Observe(setupDuration.Seconds())
 			}
 		} else {
 			// Accept hasn't arrived yet; park session so Run() can resolve it later.
-			c.correlator.RecordNewSession(newS.PID, newS.User, newS.LoginTime)
+			c.correlator.RecordNewSession(newS.User, newS.Host, newS.LoginTime)
 		}
 	}
 
@@ -218,7 +218,7 @@ func (c *SSHCollector) Run(ctx context.Context, authEvents <-chan authlog.AuthEv
 				c.correlator.RecordFailure(event.PID)
 			case authlog.EventAuthSuccess:
 				c.authSuccesses.WithLabelValues(event.User, event.RemoteIP, event.Method).Inc()
-				failCount, setup := c.correlator.RecordAccept(event.PID, event.Timestamp)
+				failCount, setup := c.correlator.RecordAccept(event.PID, event.User, event.RemoteIP, event.Timestamp)
 				c.authAttempts.WithLabelValues(event.User).Observe(float64(failCount))
 				if setup != nil {
 					c.loginSetup.WithLabelValues(setup.User).Observe(setup.Duration.Seconds())

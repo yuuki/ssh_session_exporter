@@ -450,15 +450,16 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("LoginSetup_AcceptFirst", func(t *testing.T) {
-		// Accept log line arrives first, then utmp session appears.
+		// Accept log line arrives first (sshd PID 7001).
 		appendAuthLog(t, fmt.Sprintf("Mar 27 12:06:00 server sshd[7001]: Accepted publickey for dave from 10.0.0.70 port 22 ssh2"))
 
 		// Wait for auth log ingestion.
 		time.Sleep(500 * time.Millisecond)
 
-		// Session appears in utmp with same PID.
+		// Session appears in utmp with DIFFERENT PID (login shell PID).
+		// Correlation uses {user, remoteIP}, not PID.
 		writeUtmpRecords(t, []sessionSpec{
-			{User: "dave", TTY: "pts/5", Host: "10.0.0.70", PID: 7001, TvSec: now + 2},
+			{User: "dave", TTY: "pts/5", Host: "10.0.0.70", PID: 7099, TvSec: now + 2},
 		})
 
 		body := scrapeMetricsRetry(t, func(b string) bool {
@@ -486,8 +487,9 @@ func TestE2E(t *testing.T) {
 		// Scrape to trigger Collect() which parks the session in pendingSessions.
 		triggerAndScrape(t)
 
-		// Now the accept arrives.
-		appendAuthLog(t, "Mar 27 12:07:00 server sshd[8001]: Accepted publickey for eve from 10.0.0.80 port 22 ssh2")
+		// Now the accept arrives with DIFFERENT sshd PID.
+		// Correlation uses {user, remoteIP}, not PID.
+		appendAuthLog(t, "Mar 27 12:07:00 server sshd[8099]: Accepted publickey for eve from 10.0.0.80 port 22 ssh2")
 
 		// The Run() goroutine resolves the pending session.
 		body := scrapeMetricsRetry(t, func(b string) bool {

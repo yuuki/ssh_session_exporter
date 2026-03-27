@@ -29,11 +29,11 @@ Prometheus exporter for SSH session monitoring on Linux. Two independent data so
 
 **utmp** — Parses Linux utmp binary format (384-byte records). `session.go` defines platform-independent types (`Session`, `Reader` interface); `utmp.go` contains Linux-specific binary parsing. Sessions are identified by non-empty `Host` field (excludes local logins).
 
-**authlog** — Tails auth log with polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines. Extracts sshd PID and syslog timestamp from every matched line for PID-based correlation with utmp sessions.
+**authlog** — Tails auth log with polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines. Extracts sshd PID and syslog timestamp from every matched line.
 
 **sessiontracker** — Stateful diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against previously tracked sessions, returning a `SessionDelta` with new and ended sessions (including duration). Uses struct key `{user, tty}` for collision-safe session identity.
 
-**collector** — Implements `prometheus.Collector`. Gauges (`ssh_sessions_active`, `ssh_sessions_total`) are emitted as `ConstMetric` in `Collect()`. Counters/histograms (`CounterVec`/`HistogramVec`) are registered separately and updated in `Collect()` (connection/disconnection from utmp deltas, short session detection, login setup timing via PID correlation) and `Run()` goroutine (auth events from channel). A `pidCorrelator` (`correlator.go`) tracks per-PID state (failure count, accept timestamp) to compute `ssh_login_setup_seconds` and `ssh_auth_attempts_before_success`.
+**collector** — Implements `prometheus.Collector`. Gauges (`ssh_sessions_active`, `ssh_sessions_total`) are emitted as `ConstMetric` in `Collect()`. Counters/histograms (`CounterVec`/`HistogramVec`) are registered separately and updated in `Collect()` (connection/disconnection from utmp deltas, short session detection, login setup timing) and `Run()` goroutine (auth events from channel). A `sessionCorrelator` (`correlator.go`) handles two concerns: (1) PID-based failure counting for `ssh_auth_attempts_before_success` (auth.log internal), and (2) `{user, remoteIP}` FIFO queue matching for `ssh_login_setup_seconds` (cross auth.log/utmp — PID-independent because OpenSSH privsep uses different PIDs for auth and session processes).
 
 **Key design choice**: The auth log watcher is optional — if it fails to start (permissions, missing file), the exporter continues with utmp-based metrics only.
 
