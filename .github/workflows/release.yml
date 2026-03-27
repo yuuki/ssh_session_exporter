@@ -35,7 +35,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
         run: |
-          go build -trimpath -o ssh_session_exporter ./cmd/ssh_session_exporter
+          go build -trimpath -o ssh_session_exporter .
 
       - name: Package
         run: |
