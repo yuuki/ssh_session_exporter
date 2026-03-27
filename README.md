@@ -1,4 +1,8 @@
 # SSH Session Exporter
+[![AI Generated](https://img.shields.io/badge/AI%20Generated-Claude-orange?logo=anthropic)](https://claude.ai/claude-code)
+[![License](https://img.shields.io/github/license/yuuki/ssh_sesshon_exporter)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_sesshon_exporter)](https://github.com/yuuki/ssh_sesshon_exporter/releases)
+[![Go](https://img.shields.io/badge/Go-%3E%3D1.26-blue?logo=go)](https://go.dev)
 
 Prometheus exporter for monitoring SSH sessions and authentication events on Linux servers.
 
