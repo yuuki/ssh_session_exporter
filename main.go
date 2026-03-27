@@ -16,10 +16,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/yuuki/ssh_sesshon_exporter/authlog"
-	"github.com/yuuki/ssh_sesshon_exporter/collector"
-	"github.com/yuuki/ssh_sesshon_exporter/sessiontracker"
-	"github.com/yuuki/ssh_sesshon_exporter/utmp"
+	"github.com/yuuki/ssh_session_exporter/authlog"
+	"github.com/yuuki/ssh_session_exporter/collector"
+	"github.com/yuuki/ssh_session_exporter/sessiontracker"
+	"github.com/yuuki/ssh_session_exporter/utmp"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".

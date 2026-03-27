@@ -1,4 +1,4 @@
-module github.com/yuuki/ssh_sesshon_exporter
+module github.com/yuuki/ssh_session_exporter
 
 go 1.26.1
 

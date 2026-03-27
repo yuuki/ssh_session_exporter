@@ -1,7 +1,7 @@
 # SSH Session Exporter
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-Claude-orange?logo=anthropic)](https://claude.ai/claude-code)
-[![License](https://img.shields.io/github/license/yuuki/ssh_sesshon_exporter)](LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_sesshon_exporter)](https://github.com/yuuki/ssh_sesshon_exporter/releases)
+[![License](https://img.shields.io/github/license/yuuki/ssh_session_exporter)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_session_exporter)](https://github.com/yuuki/ssh_session_exporter/releases)
 [![Go](https://img.shields.io/badge/Go-%3E%3D1.26-blue?logo=go)](https://go.dev)
 
 Prometheus exporter for monitoring SSH sessions and authentication events on Linux servers.
@@ -35,7 +35,7 @@ Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_
 ## Installation
 
 ```bash
-go install github.com/yuuki/ssh_sesshon_exporter/cmd/ssh_session_exporter@latest
+go install github.com/yuuki/ssh_session_exporter/cmd/ssh_session_exporter@latest
 ```
 
 Or build from source:

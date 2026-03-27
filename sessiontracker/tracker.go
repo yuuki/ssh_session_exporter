@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yuuki/ssh_sesshon_exporter/utmp"
+	"github.com/yuuki/ssh_session_exporter/utmp"
 )
 
 // EndedSession represents a session that has ended.

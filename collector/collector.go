@@ -5,9 +5,9 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/yuuki/ssh_sesshon_exporter/authlog"
-	"github.com/yuuki/ssh_sesshon_exporter/sessiontracker"
-	"github.com/yuuki/ssh_sesshon_exporter/utmp"
+	"github.com/yuuki/ssh_session_exporter/authlog"
+	"github.com/yuuki/ssh_session_exporter/sessiontracker"
+	"github.com/yuuki/ssh_session_exporter/utmp"
 )
 
 var (

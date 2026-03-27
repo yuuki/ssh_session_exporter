@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yuuki/ssh_sesshon_exporter/utmp"
+	"github.com/yuuki/ssh_session_exporter/utmp"
 )
 
 func newTestTracker(now time.Time) *Tracker {
