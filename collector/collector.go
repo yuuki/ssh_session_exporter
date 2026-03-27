@@ -171,6 +171,9 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 			if setupDuration >= 0 {
 				c.loginSetup.WithLabelValues(newS.User).Observe(setupDuration.Seconds())
 			}
+		} else {
+			// Accept hasn't arrived yet; park session so Run() can resolve it later.
+			c.correlator.RecordNewSession(newS.PID, newS.User, newS.LoginTime)
 		}
 	}
 
@@ -215,8 +218,11 @@ func (c *SSHCollector) Run(ctx context.Context, authEvents <-chan authlog.AuthEv
 				c.correlator.RecordFailure(event.PID)
 			case authlog.EventAuthSuccess:
 				c.authSuccesses.WithLabelValues(event.User, event.RemoteIP, event.Method).Inc()
-				failCount := c.correlator.RecordAccept(event.PID, event.Timestamp)
+				failCount, setup := c.correlator.RecordAccept(event.PID, event.Timestamp)
 				c.authAttempts.WithLabelValues(event.User).Observe(float64(failCount))
+				if setup != nil {
+					c.loginSetup.WithLabelValues(setup.User).Observe(setup.Duration.Seconds())
+				}
 			case authlog.EventInvalidUser:
 				c.invalidUsers.WithLabelValues(event.User, event.RemoteIP).Inc()
 			case authlog.EventPreauthDisconnect:
