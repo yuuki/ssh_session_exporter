@@ -25,6 +25,13 @@ import (
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
 var version = "dev"
 
+const defaultAuthLogPath = "/var/log/auth.log"
+
+var defaultAuthLogCandidates = []string{
+	defaultAuthLogPath,
+	"/var/log/secure",
+}
+
 var (
 	listenAddress = flag.String("web.listen-address", ":9842",
 		"Address to listen on for web interface and telemetry.")
@@ -32,7 +39,7 @@ var (
 		"Path under which to expose metrics.")
 	utmpPath = flag.String("utmp.path", "/var/run/utmp",
 		"Path to the utmp file.")
-	authLogPath = flag.String("auth-log.path", "/var/log/auth.log",
+	authLogPath = flag.String("auth-log.path", defaultAuthLogPath,
 		"Path to the auth log file.")
 	showVersion = flag.Bool("version", false, "Print version and exit.")
 )
@@ -75,13 +82,26 @@ func main() {
 	}
 
 	// Auth log watcher (optional — continue without it if unavailable).
-	authWatcher := authlog.NewFileWatcher(*authLogPath, logger)
-	if err := authWatcher.Start(ctx); err != nil {
-		logger.Warn("failed to start auth log watcher, auth metrics will be unavailable",
-			"path", *authLogPath, "error", err)
+	resolvedAuthLogPath, ok := resolveAuthLogPath(*authLogPath, flagWasExplicitlySet("auth-log.path"), defaultAuthLogCandidates, authLogExists)
+	var authWatcher *authlog.FileWatcher
+	if !ok {
+		logger.Info("auth log watcher disabled because no auth log file was found",
+			"candidates", defaultAuthLogCandidates)
 	} else {
-		go sshCollector.Run(ctx, authWatcher.Events())
-		logger.Info("auth log watcher started", "path", *authLogPath)
+		if resolvedAuthLogPath != *authLogPath {
+			logger.Info("using fallback auth log path",
+				"configured_path", *authLogPath,
+				"path", resolvedAuthLogPath)
+		}
+
+		authWatcher = authlog.NewFileWatcher(resolvedAuthLogPath, logger)
+		if err := authWatcher.Start(ctx); err != nil {
+			logger.Warn("failed to start auth log watcher, auth metrics will be unavailable",
+				"path", resolvedAuthLogPath, "error", err)
+		} else {
+			go sshCollector.Run(ctx, authWatcher.Events())
+			logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
+		}
 	}
 
 	// HTTP server.
@@ -118,8 +138,39 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	authWatcher.Stop()
+	if authWatcher != nil {
+		authWatcher.Stop()
+	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error", "error", err)
 	}
+}
+
+func resolveAuthLogPath(configuredPath string, explicit bool, candidates []string, exists func(string) bool) (string, bool) {
+	if explicit {
+		return configuredPath, true
+	}
+	for _, candidate := range candidates {
+		if exists(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func authLogExists(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	return true
+}
+
+func flagWasExplicitlySet(name string) bool {
+	explicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			explicit = true
+		}
+	})
+	return explicit
 }

@@ -57,7 +57,7 @@ ssh_session_exporter [flags]
 | `--web.listen-address` | `:9842` | Address to listen on |
 | `--web.telemetry-path` | `/metrics` | Path for metrics endpoint |
 | `--utmp.path` | `/var/run/utmp` | Path to utmp file |
-| `--auth-log.path` | `/var/log/auth.log` | Path to auth log file |
+| `--auth-log.path` | `/var/log/auth.log` | Path to auth log file. When not explicitly set, the exporter also falls back to `/var/log/secure` if present |
 
 ### Prometheus Configuration
 
@@ -88,7 +88,7 @@ WantedBy=multi-user.target
 
 Reading `/var/log/auth.log` requires root or membership in the `adm` group (Debian/Ubuntu).
 
-For RHEL/CentOS, use `--auth-log.path=/var/log/secure`.
+When `--auth-log.path` is left at its default, the exporter automatically uses `/var/log/secure` on RHEL/CentOS if `/var/log/auth.log` does not exist. If you set `--auth-log.path` explicitly, that path is used as-is.
 
 ## Note on Label Cardinality
 
