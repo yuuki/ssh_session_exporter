@@ -20,6 +20,4 @@ install:
 	GOOS=$(GOOS) go install .
 
 test-e2e:
-	docker compose -f e2e/docker-compose.e2e.yml build
 	go test -tags e2e -v -count=1 -timeout 120s ./e2e/
-	docker compose -f e2e/docker-compose.e2e.yml down -v
