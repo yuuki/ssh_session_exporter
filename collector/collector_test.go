@@ -90,7 +90,7 @@ ssh_exporter_scrape_success 0
 	}
 }
 
-func TestCollect_ConnectionCounters(t *testing.T) {
+func TestCollect_BaselineNotCounted(t *testing.T) {
 	reg := prometheus.NewPedanticRegistry()
 	now := time.Now()
 	reader := &mockReader{
@@ -105,12 +105,41 @@ func TestCollect_ConnectionCounters(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Trigger a collect to detect session changes and update counters.
+	// First scrape should NOT count the pre-existing session as a new connection.
 	ch := make(chan prometheus.Metric, 100)
 	c.Collect(ch)
 	close(ch)
 
-	// Now verify the counter via the registry.
+	expected := `
+# HELP ssh_connections_total Total number of SSH connections established.
+# TYPE ssh_connections_total counter
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_connections_total"); err != nil {
+		t.Errorf("baseline sessions should not be counted as new connections:\n%v", err)
+	}
+}
+
+func TestCollect_ConnectionCounters(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Now()
+	// Start with no sessions for baseline.
+	reader := &mockReader{sessions: nil}
+	tracker := sessiontracker.New(slog.Default())
+
+	c, err := New(reg, reader, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// A new session appears after baseline.
+	reader.sessions = []utmp.Session{
+		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now},
+	}
+
+	ch := make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
 	expected := `
 # HELP ssh_connections_total Total number of SSH connections established.
 # TYPE ssh_connections_total counter

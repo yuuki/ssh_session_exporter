@@ -16,9 +16,9 @@ var (
 		"Number of currently active SSH sessions.",
 		[]string{"user", "remote_ip", "tty"}, nil,
 	)
-	sessionsTotalDesc = prometheus.NewDesc(
-		"ssh_sessions_total",
-		"Total number of currently active SSH sessions.",
+	sessionsCountDesc = prometheus.NewDesc(
+		"ssh_sessions_count",
+		"Number of currently active SSH sessions.",
 		nil, nil,
 	)
 	scrapeSuccessDesc = prometheus.NewDesc(
@@ -77,6 +77,14 @@ func New(
 		sessionDuration: sessionDuration,
 	}
 
+	// Read initial utmp snapshot as baseline so that pre-existing sessions
+	// are not counted as new connections on the first scrape.
+	if sessions, err := utmpReader.ReadSessions(); err != nil {
+		logger.Warn("failed to read initial utmp baseline", "error", err)
+	} else {
+		tracker.UpdateSessions(sessions)
+	}
+
 	for _, col := range []prometheus.Collector{authFailures, connections, disconnections, sessionDuration, c} {
 		if err := reg.Register(col); err != nil {
 			return nil, err
@@ -89,7 +97,7 @@ func New(
 // Describe implements prometheus.Collector.
 func (c *SSHCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- sessionsActiveDesc
-	ch <- sessionsTotalDesc
+	ch <- sessionsCountDesc
 	ch <- scrapeSuccessDesc
 }
 
@@ -118,7 +126,7 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 		)
 	}
 
-	ch <- prometheus.MustNewConstMetric(sessionsTotalDesc, prometheus.GaugeValue, float64(len(sessions)))
+	ch <- prometheus.MustNewConstMetric(sessionsCountDesc, prometheus.GaugeValue, float64(len(sessions)))
 	ch <- prometheus.MustNewConstMetric(scrapeSuccessDesc, prometheus.GaugeValue, 1)
 }
 

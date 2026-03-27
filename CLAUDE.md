@@ -42,7 +42,7 @@ Prometheus exporter for SSH session monitoring on Linux. Two independent data so
 | Metric | Type | Labels |
 |--------|------|--------|
 | `ssh_sessions_active` | Gauge | user, remote_ip, tty |
-| `ssh_sessions_total` | Gauge | — |
+| `ssh_sessions_count` | Gauge | — |
 | `ssh_auth_failures_total` | Counter | user, remote_ip, method |
 | `ssh_connections_total` | Counter | user, remote_ip |
 | `ssh_disconnections_total` | Counter | user, remote_ip |

@@ -7,9 +7,10 @@ Prometheus exporter for monitoring SSH sessions and authentication events on Lin
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `ssh_sessions_active` | Gauge | `user`, `remote_ip`, `tty` | Currently active SSH sessions |
+| `ssh_sessions_count` | Gauge | - | Total number of currently active SSH sessions |
 | `ssh_auth_failures_total` | Counter | `user`, `remote_ip`, `method` | SSH authentication failures |
-| `ssh_connections_total` | Counter | `user`, `remote_ip` | SSH connections established |
-| `ssh_disconnections_total` | Counter | `user`, `remote_ip` | SSH disconnections |
+| `ssh_connections_total` | Counter | `user`, `remote_ip` | SSH connections established (detected via utmp diff) |
+| `ssh_disconnections_total` | Counter | `user`, `remote_ip` | SSH disconnections (detected via utmp diff) |
 | `ssh_session_duration_seconds` | Histogram | `user` | Distribution of session durations |
 | `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
 
@@ -19,6 +20,13 @@ Prometheus exporter for monitoring SSH sessions and authentication events on Lin
 - **auth log** (`/var/log/auth.log` or `/var/log/secure`): Authentication failure events with method details
 
 The auth log is optional — if unavailable, the exporter continues with utmp-based metrics only.
+
+### Limitations of utmp-based event detection
+
+Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_total`) and session duration (`ssh_session_duration_seconds`) are derived by diffing utmp snapshots between scrapes. This means:
+
+- Sessions that start and end between two scrapes are not observed.
+- Pre-existing sessions at exporter startup are treated as baseline and not counted as new connections.
 
 ## Installation
 
