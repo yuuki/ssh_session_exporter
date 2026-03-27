@@ -69,9 +69,10 @@ func (t *Tracker) UpdateSessions(current []utmp.Session) SessionDelta {
 		currentSet[sessionKey{s.User, s.TTY}] = s
 	}
 
-	// Detect ended sessions (in active but not in current).
+	// Detect ended sessions (in active but not in current, or replaced by a new session on the same TTY).
 	for key, tracked := range t.active {
-		if _, exists := currentSet[key]; !exists {
+		current, exists := currentSet[key]
+		if !exists || current.LoginTime != tracked.LoginTime {
 			duration := now.Sub(tracked.LoginTime)
 			delta.EndedSessions = append(delta.EndedSessions, EndedSession{
 				Session:  tracked,

@@ -139,6 +139,38 @@ func TestUpdateSessions_AllDisconnect(t *testing.T) {
 	}
 }
 
+func TestUpdateSessions_SameUserTTYRelogin(t *testing.T) {
+	loginTime1 := time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC)
+	loginTime2 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker := newTestTracker(loginTime2)
+
+	tracker.UpdateSessions([]utmp.Session{
+		{User: "tsubouchi", TTY: "pts/0", Host: "192.168.1.10", LoginTime: loginTime1, PID: 1234},
+	})
+
+	// logout and re-login both occur between scrapes: same key, different LoginTime and PID
+	delta := tracker.UpdateSessions([]utmp.Session{
+		{User: "tsubouchi", TTY: "pts/0", Host: "192.168.1.10", LoginTime: loginTime2, PID: 5678},
+	})
+
+	if len(delta.EndedSessions) != 1 {
+		t.Fatalf("expected 1 ended session, got %d", len(delta.EndedSessions))
+	}
+	if delta.EndedSessions[0].User != "tsubouchi" {
+		t.Errorf("expected tsubouchi to end, got %s", delta.EndedSessions[0].User)
+	}
+	expectedDuration := loginTime2.Sub(loginTime1)
+	if delta.EndedSessions[0].Duration != expectedDuration {
+		t.Errorf("expected duration %v, got %v", expectedDuration, delta.EndedSessions[0].Duration)
+	}
+	if len(delta.NewSessions) != 1 {
+		t.Fatalf("expected 1 new session, got %d", len(delta.NewSessions))
+	}
+	if delta.NewSessions[0].PID != 5678 {
+		t.Errorf("expected new session PID 5678, got %d", delta.NewSessions[0].PID)
+	}
+}
+
 func TestUpdateSessions_SessionReplacement(t *testing.T) {
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	tracker := newTestTracker(now)
