@@ -367,4 +367,49 @@ func TestE2E(t *testing.T) {
 			"user": "baduser", "remote_ip": "10.0.0.99", "method": "password",
 		})
 	})
+
+	t.Run("AuthSuccess", func(t *testing.T) {
+		appendAuthLog(t, "Mar 27 12:01:00 server sshd[5001]: Accepted publickey for alice from 192.168.1.10 port 22 ssh2")
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_auth_success_total", map[string]string{
+				"user": "alice", "remote_ip": "192.168.1.10", "method": "publickey",
+			})
+			return found
+		}, 6)
+
+		assertMetricValue(t, body, "ssh_auth_success_total", 1, map[string]string{
+			"user": "alice", "remote_ip": "192.168.1.10", "method": "publickey",
+		})
+	})
+
+	t.Run("InvalidUser", func(t *testing.T) {
+		appendAuthLog(t, "Mar 27 12:02:00 server sshd[5002]: Invalid user hacker from 10.0.0.99 port 22")
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_invalid_user_attempts_total", map[string]string{
+				"user": "hacker", "remote_ip": "10.0.0.99",
+			})
+			return found
+		}, 6)
+
+		assertMetricValue(t, body, "ssh_invalid_user_attempts_total", 1, map[string]string{
+			"user": "hacker", "remote_ip": "10.0.0.99",
+		})
+	})
+
+	t.Run("PreauthDisconnect", func(t *testing.T) {
+		appendAuthLog(t, "Mar 27 12:03:00 server sshd[5003]: Disconnected from authenticating user root 10.0.0.1 port 22 [preauth]")
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_preauth_disconnects_total", map[string]string{
+				"user": "root", "remote_ip": "10.0.0.1",
+			})
+			return found
+		}, 6)
+
+		assertMetricValue(t, body, "ssh_preauth_disconnects_total", 1, map[string]string{
+			"user": "root", "remote_ip": "10.0.0.1",
+		})
+	})
 }
