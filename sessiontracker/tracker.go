@@ -42,9 +42,9 @@ func New(logger *slog.Logger) *Tracker {
 }
 
 // Initialize populates the tracker with an initial set of sessions as baseline.
-// No delta is returned; these sessions are treated as pre-existing and will not
-// generate connection events. Only their future disappearance from utmp will
-// be ignored until they reappear and disappear after a subsequent UpdateSessions call.
+// These sessions are not counted as new connections. If they subsequently
+// disappear from utmp, they are reported as ended sessions by UpdateSessions
+// and counted as disconnections.
 func (t *Tracker) Initialize(current []utmp.Session) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
