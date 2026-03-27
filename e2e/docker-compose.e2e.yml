@@ -1,0 +1,12 @@
+services:
+  exporter:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.e2e
+    ports:
+      - "${E2E_PORT:-9842}:9842"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9842/metrics"]
+      interval: 1s
+      timeout: 2s
+      retries: 10

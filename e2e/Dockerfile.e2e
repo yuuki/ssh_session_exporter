@@ -1,0 +1,21 @@
+# Stage 1: Build exporter and utmpwriter
+FROM golang:1.24-bookworm AS builder
+ENV GOTOOLCHAIN=auto
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /ssh_session_exporter .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /utmpwriter ./e2e/cmd/utmpwriter/
+
+# Stage 2: Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /ssh_session_exporter /usr/local/bin/
+COPY --from=builder /utmpwriter /usr/local/bin/
+RUN mkdir -p /data && touch /data/utmp /data/auth.log
+EXPOSE 9842
+ENTRYPOINT ["/usr/local/bin/ssh_session_exporter", \
+    "--utmp.path=/data/utmp", \
+    "--auth-log.path=/data/auth.log", \
+    "--web.listen-address=:9842"]
