@@ -412,4 +412,116 @@ func TestE2E(t *testing.T) {
 			"user": "root", "remote_ip": "10.0.0.1",
 		})
 	})
+
+	t.Run("AuthFailurePAM", func(t *testing.T) {
+		appendAuthLog(t, "Mar 27 12:04:00 server sshd[5010]: Failed keyboard-interactive/pam for pamuser from 10.0.0.50 port 22 ssh2")
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_auth_failures_total", map[string]string{
+				"user": "pamuser", "remote_ip": "10.0.0.50", "method": "keyboard-interactive/pam",
+			})
+			return found
+		}, 6)
+
+		assertMetricValue(t, body, "ssh_auth_failures_total", 1, map[string]string{
+			"user": "pamuser", "remote_ip": "10.0.0.50", "method": "keyboard-interactive/pam",
+		})
+	})
+
+	t.Run("AuthAttemptsBeforeSuccess", func(t *testing.T) {
+		// Two failures then one success for the same sshd PID.
+		appendAuthLog(t, "Mar 27 12:05:00 server sshd[6001]: Failed password for carol from 10.0.0.60 port 22 ssh2")
+		appendAuthLog(t, "Mar 27 12:05:01 server sshd[6001]: Failed password for carol from 10.0.0.60 port 22 ssh2")
+		appendAuthLog(t, "Mar 27 12:05:02 server sshd[6001]: Accepted password for carol from 10.0.0.60 port 22 ssh2")
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_auth_attempts_before_success_count", map[string]string{
+				"user": "carol",
+			})
+			return found
+		}, 6)
+
+		assertMetricValue(t, body, "ssh_auth_attempts_before_success_count", 1, map[string]string{
+			"user": "carol",
+		})
+		assertMetricValue(t, body, "ssh_auth_attempts_before_success_sum", 2, map[string]string{
+			"user": "carol",
+		})
+	})
+
+	t.Run("LoginSetup_AcceptFirst", func(t *testing.T) {
+		// Accept log line arrives first, then utmp session appears.
+		appendAuthLog(t, fmt.Sprintf("Mar 27 12:06:00 server sshd[7001]: Accepted publickey for dave from 10.0.0.70 port 22 ssh2"))
+
+		// Wait for auth log ingestion.
+		time.Sleep(500 * time.Millisecond)
+
+		// Session appears in utmp with same PID.
+		writeUtmpRecords(t, []sessionSpec{
+			{User: "dave", TTY: "pts/5", Host: "10.0.0.70", PID: 7001, TvSec: now + 2},
+		})
+
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_login_setup_seconds_count", map[string]string{
+				"user": "dave",
+			})
+			return found
+		}, 6)
+
+		assertMetricGE(t, body, "ssh_login_setup_seconds_count", 1, map[string]string{
+			"user": "dave",
+		})
+	})
+
+	t.Run("LoginSetup_SessionFirst", func(t *testing.T) {
+		// Session appears in utmp BEFORE accept log line.
+		// First clear the previous dave session to avoid key collision.
+		clearUtmp(t)
+		triggerAndScrape(t)
+
+		writeUtmpRecords(t, []sessionSpec{
+			{User: "eve", TTY: "pts/6", Host: "10.0.0.80", PID: 8001, TvSec: now + 4},
+		})
+
+		// Scrape to trigger Collect() which parks the session in pendingSessions.
+		triggerAndScrape(t)
+
+		// Now the accept arrives.
+		appendAuthLog(t, "Mar 27 12:07:00 server sshd[8001]: Accepted publickey for eve from 10.0.0.80 port 22 ssh2")
+
+		// The Run() goroutine resolves the pending session.
+		body := scrapeMetricsRetry(t, func(b string) bool {
+			_, found := findMetricValue(b, "ssh_login_setup_seconds_count", map[string]string{
+				"user": "eve",
+			})
+			return found
+		}, 6)
+
+		assertMetricGE(t, body, "ssh_login_setup_seconds_count", 1, map[string]string{
+			"user": "eve",
+		})
+	})
+
+	t.Run("ShortSession", func(t *testing.T) {
+		// Clear previous state.
+		clearUtmp(t)
+		triggerAndScrape(t)
+
+		// Write a session with a very recent timestamp.
+		writeUtmpRecords(t, []sessionSpec{
+			{User: "frank", TTY: "pts/7", Host: "10.0.0.90", PID: 9001, TvSec: int32(time.Now().Unix())},
+		})
+
+		// Scrape to register the session.
+		triggerAndScrape(t)
+
+		// End the session immediately (within 30s threshold).
+		clearUtmp(t)
+
+		body := triggerAndScrape(t)
+
+		assertMetricGE(t, body, "ssh_short_sessions_total", 1, map[string]string{
+			"user": "frank", "remote_ip": "10.0.0.90",
+		})
+	})
 }
