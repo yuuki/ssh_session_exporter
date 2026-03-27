@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -71,7 +72,7 @@ ssh_exporter_scrape_success 1
 
 func TestCollect_ScrapeFailure(t *testing.T) {
 	reg := prometheus.NewPedanticRegistry()
-	reader := &mockReader{err: &testError{}}
+	reader := &mockReader{err: errors.New("test error")}
 	tracker := sessiontracker.New(slog.Default())
 
 	c, err := New(reg, reader, tracker, slog.Default())
@@ -88,10 +89,6 @@ ssh_exporter_scrape_success 0
 		t.Errorf("unexpected metrics:\n%v", err)
 	}
 }
-
-type testError struct{}
-
-func (e *testError) Error() string { return "test error" }
 
 func TestCollect_ConnectionCounters(t *testing.T) {
 	reg := prometheus.NewPedanticRegistry()

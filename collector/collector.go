@@ -3,7 +3,6 @@ package collector
 import (
 	"context"
 	"log/slog"
-	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/yuuki/ssh_sesshon_exporter/authlog"
@@ -17,6 +16,11 @@ var (
 		"Number of currently active SSH sessions.",
 		[]string{"user", "remote_ip", "tty"}, nil,
 	)
+	sessionsTotalDesc = prometheus.NewDesc(
+		"ssh_sessions_total",
+		"Total number of currently active SSH sessions.",
+		nil, nil,
+	)
 	scrapeSuccessDesc = prometheus.NewDesc(
 		"ssh_exporter_scrape_success",
 		"Whether the SSH exporter scrape was successful.",
@@ -29,13 +33,10 @@ type SSHCollector struct {
 	utmpReader      utmp.Reader
 	tracker         *sessiontracker.Tracker
 	logger          *slog.Logger
-
 	authFailures    *prometheus.CounterVec
 	connections     *prometheus.CounterVec
 	disconnections  *prometheus.CounterVec
 	sessionDuration *prometheus.HistogramVec
-
-	mu sync.Mutex
 }
 
 // New creates a new SSHCollector and registers counter/histogram metrics.
@@ -88,15 +89,12 @@ func New(
 // Describe implements prometheus.Collector.
 func (c *SSHCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- sessionsActiveDesc
+	ch <- sessionsTotalDesc
 	ch <- scrapeSuccessDesc
 }
 
-// Collect implements prometheus.Collector. It reads utmp, detects session
-// changes, and emits gauge metrics for active sessions.
+// Collect reads utmp, detects session changes, and emits gauge metrics.
 func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	sessions, err := c.utmpReader.ReadSessions()
 	if err != nil {
 		c.logger.Error("failed to read utmp", "error", err)
@@ -104,17 +102,15 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	// Detect session changes and update counters.
 	delta := c.tracker.UpdateSessions(sessions)
 	for _, ended := range delta.EndedSessions {
 		c.sessionDuration.WithLabelValues(ended.User).Observe(ended.Duration.Seconds())
-		c.disconnections.WithLabelValues(ended.User, ended.RemoteIP).Inc()
+		c.disconnections.WithLabelValues(ended.User, ended.Host).Inc()
 	}
 	for _, newS := range delta.NewSessions {
-		c.connections.WithLabelValues(newS.User, newS.RemoteIP).Inc()
+		c.connections.WithLabelValues(newS.User, newS.Host).Inc()
 	}
 
-	// Emit active session gauges.
 	for _, s := range sessions {
 		ch <- prometheus.MustNewConstMetric(
 			sessionsActiveDesc, prometheus.GaugeValue, 1,
@@ -122,11 +118,11 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 		)
 	}
 
+	ch <- prometheus.MustNewConstMetric(sessionsTotalDesc, prometheus.GaugeValue, float64(len(sessions)))
 	ch <- prometheus.MustNewConstMetric(scrapeSuccessDesc, prometheus.GaugeValue, 1)
 }
 
-// Run processes auth log events and updates counter metrics.
-// It blocks until the context is cancelled or the events channel is closed.
+// Run processes auth log failure events and updates the auth failure counter.
 func (c *SSHCollector) Run(ctx context.Context, authEvents <-chan authlog.AuthEvent) {
 	for {
 		select {
@@ -136,14 +132,7 @@ func (c *SSHCollector) Run(ctx context.Context, authEvents <-chan authlog.AuthEv
 			if !ok {
 				return
 			}
-			switch event.Type {
-			case authlog.EventAuthFailure:
-				c.authFailures.WithLabelValues(event.User, event.RemoteIP, event.Method).Inc()
-			case authlog.EventAuthSuccess:
-				// Connection counting is handled by utmp delta in Collect.
-			case authlog.EventDisconnect:
-				// Disconnection counting is handled by utmp delta in Collect.
-			}
+			c.authFailures.WithLabelValues(event.User, event.RemoteIP, event.Method).Inc()
 		}
 	}
 }
