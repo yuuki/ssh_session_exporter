@@ -40,8 +40,11 @@ jobs:
 
       - name: Package
         run: |
-          ARCHIVE="ssh_session_exporter-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz"
-          tar czf "$ARCHIVE" ssh_session_exporter
+          PKG="ssh_session_exporter-${{ github.ref_name }}-${{ matrix.suffix }}"
+          ARCHIVE="${PKG}.tar.gz"
+          mkdir "$PKG"
+          cp ssh_session_exporter LICENSE README.md "$PKG/"
+          tar czf "$ARCHIVE" "$PKG"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
