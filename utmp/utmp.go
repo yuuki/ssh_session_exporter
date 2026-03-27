@@ -13,11 +13,8 @@ import (
 )
 
 const (
-	// RecordSize is the size of a utmp record on Linux x86_64.
-	RecordSize = 384
-
-	// UserProcess indicates a normal user login.
-	UserProcess int16 = 7
+	recordSize  = 384 // size of a utmp record on Linux x86_64
+	userProcess int16 = 7
 
 	utNameSize = 32
 	utLineSize = 32
@@ -43,28 +40,25 @@ type rawRecord struct {
 	_       [20]byte // unused
 }
 
-// FileReader reads sessions from a utmp file.
 type FileReader struct {
 	path   string
 	logger *slog.Logger
 }
 
-// NewFileReader creates a new FileReader for the given utmp file path.
 func NewFileReader(path string, logger *slog.Logger) *FileReader {
 	return &FileReader{path: path, logger: logger}
 }
 
-// ReadSessions reads and parses the utmp file, returning active SSH sessions.
 func (r *FileReader) ReadSessions() ([]Session, error) {
 	data, err := os.ReadFile(r.path)
 	if err != nil {
 		return nil, fmt.Errorf("read utmp file %s: %w", r.path, err)
 	}
-	return ParseRecords(data)
+	return parseRecords(data)
 }
 
-// ParseRecords parses raw utmp binary data into SSH sessions.
-func ParseRecords(data []byte) ([]Session, error) {
+// parseRecords parses raw utmp binary data into SSH sessions.
+func parseRecords(data []byte) ([]Session, error) {
 	reader := bytes.NewReader(data)
 	var sessions []Session
 
@@ -77,7 +71,7 @@ func ParseRecords(data []byte) ([]Session, error) {
 			return sessions, fmt.Errorf("parse utmp record: %w", err)
 		}
 
-		if rec.Type != UserProcess {
+		if rec.Type != userProcess {
 			continue
 		}
 

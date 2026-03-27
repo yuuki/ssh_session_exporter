@@ -23,7 +23,7 @@ func makeRecord(typ int16, pid int32, user, line, host string, sec int32) []byte
 	if err := binary.Write(&buf, binary.LittleEndian, &rec); err != nil {
 		panic(err)
 	}
-	if buf.Len() != RecordSize {
+	if buf.Len() != recordSize {
 		panic("unexpected record size")
 	}
 	return buf.Bytes()
@@ -31,10 +31,10 @@ func makeRecord(typ int16, pid int32, user, line, host string, sec int32) []byte
 
 func TestParseRecords_SSHSessions(t *testing.T) {
 	data := make([]byte, 0)
-	data = append(data, makeRecord(UserProcess, 1234, "alice", "pts/0", "192.168.1.10", 1700000000)...)
-	data = append(data, makeRecord(UserProcess, 5678, "bob", "pts/1", "10.0.0.5", 1700001000)...)
+	data = append(data, makeRecord(userProcess, 1234, "alice", "pts/0", "192.168.1.10", 1700000000)...)
+	data = append(data, makeRecord(userProcess, 5678, "bob", "pts/1", "10.0.0.5", 1700001000)...)
 
-	sessions, err := ParseRecords(data)
+	sessions, err := parseRecords(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,9 +64,9 @@ func TestParseRecords_SkipsNonUserProcess(t *testing.T) {
 	// Type 6 = INIT_PROCESS, should be skipped
 	data = append(data, makeRecord(6, 100, "init", "si", "", 1700000000)...)
 	// Valid SSH session
-	data = append(data, makeRecord(UserProcess, 999, "root", "pts/2", "172.16.0.1", 1700000000)...)
+	data = append(data, makeRecord(userProcess, 999, "root", "pts/2", "172.16.0.1", 1700000000)...)
 
-	sessions, err := ParseRecords(data)
+	sessions, err := parseRecords(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -81,11 +81,11 @@ func TestParseRecords_SkipsNonUserProcess(t *testing.T) {
 func TestParseRecords_SkipsLocalLogin(t *testing.T) {
 	data := make([]byte, 0)
 	// Local login (empty host) should be skipped
-	data = append(data, makeRecord(UserProcess, 1000, "local", "tty1", "", 1700000000)...)
+	data = append(data, makeRecord(userProcess, 1000, "local", "tty1", "", 1700000000)...)
 	// SSH session
-	data = append(data, makeRecord(UserProcess, 2000, "remote", "pts/0", "10.0.0.1", 1700000000)...)
+	data = append(data, makeRecord(userProcess, 2000, "remote", "pts/0", "10.0.0.1", 1700000000)...)
 
-	sessions, err := ParseRecords(data)
+	sessions, err := parseRecords(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestParseRecords_SkipsLocalLogin(t *testing.T) {
 }
 
 func TestParseRecords_EmptyInput(t *testing.T) {
-	sessions, err := ParseRecords(nil)
+	sessions, err := parseRecords(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestParseRecords_EmptyInput(t *testing.T) {
 func TestParseRecords_TruncatedInput(t *testing.T) {
 	// Less than one full record
 	data := make([]byte, 100)
-	sessions, err := ParseRecords(data)
+	sessions, err := parseRecords(data)
 	if err == nil {
 		t.Fatal("expected error for truncated input")
 	}
