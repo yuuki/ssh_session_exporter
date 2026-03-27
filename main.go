@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alecthomas/kingpin/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -23,23 +23,18 @@ import (
 )
 
 var (
-	listenAddress = kingpin.Flag("web.listen-address",
-		"Address to listen on for web interface and telemetry.").
-		Default(":9842").String()
-	metricsPath = kingpin.Flag("web.telemetry-path",
-		"Path under which to expose metrics.").
-		Default("/metrics").String()
-	utmpPath = kingpin.Flag("utmp.path",
-		"Path to the utmp file.").
-		Default("/var/run/utmp").String()
-	authLogPath = kingpin.Flag("auth-log.path",
-		"Path to the auth log file.").
-		Default("/var/log/auth.log").String()
+	listenAddress = flag.String("web.listen-address", ":9842",
+		"Address to listen on for web interface and telemetry.")
+	metricsPath = flag.String("web.telemetry-path", "/metrics",
+		"Path under which to expose metrics.")
+	utmpPath = flag.String("utmp.path", "/var/run/utmp",
+		"Path to the utmp file.")
+	authLogPath = flag.String("auth-log.path", "/var/log/auth.log",
+		"Path to the auth log file.")
 )
 
 func main() {
-	kingpin.HelpFlag.Short('h')
-	kingpin.Parse()
+	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
