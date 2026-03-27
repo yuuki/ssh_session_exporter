@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,6 +104,17 @@ type sessionSpec struct {
 	TvSec int32  `json:"tv_sec"`
 }
 
+func composeExecStdin(stdin io.Reader, args ...string) (string, error) {
+	fullArgs := append([]string{
+		"compose", "-f", composeDir + "/docker-compose.e2e.yml",
+		"exec", "-T", "exporter",
+	}, args...)
+	cmd := exec.Command("docker", fullArgs...)
+	cmd.Stdin = stdin
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func writeUtmpRecords(t *testing.T, records []sessionSpec) {
 	t.Helper()
 	data, err := json.Marshal(records)
@@ -110,14 +122,7 @@ func writeUtmpRecords(t *testing.T, records []sessionSpec) {
 		t.Fatalf("marshal records: %v", err)
 	}
 
-	fullArgs := []string{
-		"compose", "-f", composeDir + "/docker-compose.e2e.yml",
-		"exec", "-T", "exporter",
-		"utmpwriter", "--path=/data/utmp", "--action=write",
-	}
-	cmd := exec.Command("docker", fullArgs...)
-	cmd.Stdin = strings.NewReader(string(data))
-	out, err := cmd.CombinedOutput()
+	out, err := composeExecStdin(bytes.NewReader(data), "utmpwriter", "--path=/data/utmp", "--action=write")
 	if err != nil {
 		t.Fatalf("writeUtmpRecords: %v\n%s", err, out)
 	}
@@ -217,18 +222,13 @@ func findMetricValue(body, name string, labels map[string]string) (float64, bool
 	return 0, false
 }
 
-// findMetricExists checks if any metric line with the given name (and optional labels) exists.
 func findMetricExists(body, name string) bool {
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, name) {
-			continue
-		}
-		rest := line[len(name):]
-		if len(rest) > 0 && (rest[0] == ' ' || rest[0] == '{') {
-			return true
+		if strings.HasPrefix(line, name) {
+			rest := line[len(name):]
+			if len(rest) > 0 && (rest[0] == ' ' || rest[0] == '{') {
+				return true
+			}
 		}
 	}
 	return false
