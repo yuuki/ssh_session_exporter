@@ -91,9 +91,9 @@ func writeRecords(path string) error {
 		rec.Type = userProcess
 		rec.PID = s.PID
 		rec.TvSec = s.TvSec
-		copyString(rec.User[:], s.User)
-		copyString(rec.Line[:], s.TTY)
-		copyString(rec.Host[:], s.Host)
+		copy(rec.User[:], s.User)
+		copy(rec.Line[:], s.TTY)
+		copy(rec.Host[:], s.Host)
 
 		if err := binary.Write(f, binary.LittleEndian, &rec); err != nil {
 			return fmt.Errorf("write record: %w", err)
@@ -103,9 +103,3 @@ func writeRecords(path string) error {
 	return nil
 }
 
-func copyString(dst []byte, src string) {
-	copy(dst, src)
-	if len(src) < len(dst) {
-		dst[len(src)] = 0
-	}
-}
