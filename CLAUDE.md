@@ -29,11 +29,11 @@ Prometheus exporter for SSH session monitoring on Linux. Two independent data so
 
 **utmp** — Parses Linux utmp binary format (384-byte records). `session.go` defines platform-independent types (`Session`, `Reader` interface); `utmp.go` contains Linux-specific binary parsing. Sessions are identified by non-empty `Host` field (excludes local logins).
 
-**authlog** — Tails auth log with `nxadm/tail` (handles log rotation). Only parses `Failed` auth lines — success/disconnect events are intentionally excluded because connection lifecycle is tracked via utmp diffs instead.
+**authlog** — Tails auth log with polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines. Extracts sshd PID and syslog timestamp from every matched line for PID-based correlation with utmp sessions.
 
 **sessiontracker** — Stateful diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against previously tracked sessions, returning a `SessionDelta` with new and ended sessions (including duration). Uses struct key `{user, tty}` for collision-safe session identity.
 
-**collector** — Implements `prometheus.Collector`. Gauges (`ssh_sessions_active`, `ssh_sessions_total`) are emitted as `ConstMetric` in `Collect()`. Counters/histograms (`CounterVec`/`HistogramVec`) are registered separately and updated in `Collect()` (connection/disconnection from utmp deltas) and `Run()` goroutine (auth failures from channel).
+**collector** — Implements `prometheus.Collector`. Gauges (`ssh_sessions_active`, `ssh_sessions_total`) are emitted as `ConstMetric` in `Collect()`. Counters/histograms (`CounterVec`/`HistogramVec`) are registered separately and updated in `Collect()` (connection/disconnection from utmp deltas, short session detection, login setup timing via PID correlation) and `Run()` goroutine (auth events from channel). A `pidCorrelator` (`correlator.go`) tracks per-PID state (failure count, accept timestamp) to compute `ssh_login_setup_seconds` and `ssh_auth_attempts_before_success`.
 
 **Key design choice**: The auth log watcher is optional — if it fails to start (permissions, missing file), the exporter continues with utmp-based metrics only.
 
@@ -44,9 +44,15 @@ Prometheus exporter for SSH session monitoring on Linux. Two independent data so
 | `ssh_sessions_active` | Gauge | user, remote_ip, tty |
 | `ssh_sessions_count` | Gauge | — |
 | `ssh_auth_failures_total` | Counter | user, remote_ip, method |
+| `ssh_auth_success_total` | Counter | user, remote_ip, method |
+| `ssh_invalid_user_attempts_total` | Counter | user, remote_ip |
+| `ssh_preauth_disconnects_total` | Counter | user, remote_ip |
 | `ssh_connections_total` | Counter | user, remote_ip |
 | `ssh_disconnections_total` | Counter | user, remote_ip |
+| `ssh_short_sessions_total` | Counter | user, remote_ip |
 | `ssh_session_duration_seconds` | Histogram | user |
+| `ssh_login_setup_seconds` | Histogram | user |
+| `ssh_auth_attempts_before_success` | Histogram | user |
 
 ## Testing Patterns
 
