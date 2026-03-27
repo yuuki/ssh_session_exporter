@@ -24,6 +24,37 @@ Prometheus exporter for monitoring SSH sessions and authentication events on Lin
 | `ssh_auth_attempts_before_success` | Histogram | `user` | Failed authentication attempts before a successful login |
 | `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        ssh_session_exporter                         │
+│                                                                     │
+│  /var/run/utmp ──→ utmp.Reader ──→ sessiontracker.Tracker ──┐      │
+│                    (binary parse)    (snapshot diff)         │      │
+│                                                              ▼      │
+│                                                   collector.SSHCollector ──→ /metrics
+│                                                              ▲      │
+│  /var/log/auth.log ──→ authlog.FileWatcher ──→ chan AuthEvent┘      │
+│  /var/log/secure       (tail + parse)                               │
+│  (optional)                                                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+| Component | Role |
+|-----------|------|
+| **utmp.Reader** | Parses the Linux utmp binary format (384-byte records). Identifies SSH sessions as entries with a non-empty `Host` field. |
+| **sessiontracker.Tracker** | Stateful snapshot diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against the previous state and returns a `SessionDelta` containing new and ended sessions (with duration). |
+| **authlog.FileWatcher** | Tails the auth log via polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines, extracts the sshd PID and syslog timestamp, and sends `AuthEvent` values to a channel. |
+| **collector.SSHCollector** | Implements `prometheus.Collector`. Processes utmp deltas on each scrape and consumes auth events in a background goroutine. Uses the PID correlator to compute metrics that span both data sources. |
+| **pidCorrelator** | Tracks per-PID state (failure count, auth-accept timestamp). Records the gap between authentication success and utmp entry appearance as `ssh_login_setup_seconds`, and the number of failures before success as `ssh_auth_attempts_before_success`. |
+
+### Data flow
+
+On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it against the previous one, and derives connection/disconnection events and session durations. Auth log processing runs in a separate goroutine and updates counters immediately as each `AuthEvent` arrives. If the auth log is unavailable, the exporter falls back gracefully to utmp-only metrics.
+
 ## Data Sources
 
 - **utmp** (`/var/run/utmp`): Active session tracking, connection/disconnection detection, session duration calculation
