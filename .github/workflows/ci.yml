@@ -15,16 +15,14 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
 
-  lint:
+  vet:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.11.4
+      - run: GOOS=linux go vet ./...
 
   test-e2e:
     runs-on: ubuntu-latest

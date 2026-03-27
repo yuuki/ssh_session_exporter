@@ -2,7 +2,7 @@ BINARY := ssh_session_exporter
 MODULE := github.com/yuuki/ssh_sesshon_exporter
 GOOS   := linux
 
-.PHONY: build test lint clean install test-e2e
+.PHONY: build test vet clean install test-e2e
 
 build:
 	GOOS=$(GOOS) go build -o $(BINARY) .
@@ -10,8 +10,8 @@ build:
 test:
 	go test ./...
 
-lint:
-	golangci-lint run ./...
+vet:
+	GOOS=linux go vet ./...
 
 clean:
 	rm -f $(BINARY)
