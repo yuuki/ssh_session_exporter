@@ -94,6 +94,39 @@ For RHEL/CentOS, use `--auth-log.path=/var/log/secure`.
 
 The `remote_ip` label on counters may produce high cardinality if many unique IPs connect. Use Prometheus `metric_relabel_configs` to aggregate or drop this label if needed.
 
+## For Developers
+
+### Release Procedure
+
+Releases are triggered by pushing a semver tag. GitHub Actions builds binaries for four architectures and publishes them as a GitHub Release automatically.
+
+```bash
+# 1. Ensure main is clean and tests pass
+git checkout main
+git pull
+make test
+make vet
+
+# 2. Create and push a tag
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The `release.yml` workflow will:
+- Build `ssh_session_exporter` for `linux/amd64`, `linux/arm64`, `linux/armv7`, `linux/386`
+- Package each binary as `ssh_session_exporter-<tag>-<arch>.tar.gz`
+- Generate `checksums.txt` (SHA-256)
+- Create a GitHub Release with auto-generated release notes
+
+The binary embeds the tag as its version string (accessible via `ssh_session_exporter --version`).
+
+To verify locally before tagging:
+
+```bash
+VERSION=v1.2.3 make build
+./ssh_session_exporter --version   # should print v1.2.3
+```
+
 ## License
 
 MIT
