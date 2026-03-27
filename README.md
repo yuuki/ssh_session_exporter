@@ -1,73 +1,11 @@
 # SSH Session Exporter
+
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-Claude-orange?logo=anthropic)](https://claude.ai/claude-code)
 [![License](https://img.shields.io/github/license/yuuki/ssh_session_exporter)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_session_exporter)](https://github.com/yuuki/ssh_session_exporter/releases)
 [![Go](https://img.shields.io/badge/Go-%3E%3D1.26-blue?logo=go)](https://go.dev)
 
-Prometheus exporter for monitoring SSH sessions and authentication events on Linux servers.
-
-## Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `ssh_sessions_active` | Gauge | `user`, `remote_ip`, `tty` | Currently active SSH sessions |
-| `ssh_sessions_count` | Gauge | - | Total number of currently active SSH sessions |
-| `ssh_auth_failures_total` | Counter | `user`, `remote_ip`, `method` | SSH authentication failures |
-| `ssh_auth_success_total` | Counter | `user`, `remote_ip`, `method` | Successful SSH authentications |
-| `ssh_invalid_user_attempts_total` | Counter | `user`, `remote_ip` | SSH authentication attempts for invalid users |
-| `ssh_preauth_disconnects_total` | Counter | `user`, `remote_ip` | SSH disconnections before authentication completed |
-| `ssh_connections_total` | Counter | `user`, `remote_ip` | SSH connections established (detected via utmp diff) |
-| `ssh_disconnections_total` | Counter | `user`, `remote_ip` | SSH disconnections (detected via utmp diff) |
-| `ssh_short_sessions_total` | Counter | `user`, `remote_ip` | SSH sessions that ended within 30 seconds |
-| `ssh_session_duration_seconds` | Histogram | `user` | Distribution of SSH session durations |
-| `ssh_login_setup_seconds` | Histogram | `user` | Time from authentication success to session appearing in utmp |
-| `ssh_auth_attempts_before_success` | Histogram | `user` | Failed authentication attempts before a successful login |
-| `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ssh_session_exporter                         │
-│                                                                     │
-│  /var/run/utmp ──→ utmp.Reader ──→ sessiontracker.Tracker ──┐      │
-│                    (binary parse)    (snapshot diff)         │      │
-│                                                              ▼      │
-│                                                   collector.SSHCollector ──→ /metrics
-│                                                              ▲      │
-│  /var/log/auth.log ──→ authlog.FileWatcher ──→ chan AuthEvent┘      │
-│  /var/log/secure       (tail + parse)                               │
-│  (optional)                                                         │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Components
-
-| Component | Role |
-|-----------|------|
-| **utmp.Reader** | Parses the Linux utmp binary format (384-byte records). Identifies SSH sessions as entries with a non-empty `Host` field. |
-| **sessiontracker.Tracker** | Stateful snapshot diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against the previous state and returns a `SessionDelta` containing new and ended sessions (with duration). |
-| **authlog.FileWatcher** | Tails the auth log via polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines, extracts the sshd PID and syslog timestamp, and sends `AuthEvent` values to a channel. |
-| **collector.SSHCollector** | Implements `prometheus.Collector`. Processes utmp deltas on each scrape and consumes auth events in a background goroutine. Uses the PID correlator to compute metrics that span both data sources. |
-| **pidCorrelator** | Tracks per-PID state (failure count, auth-accept timestamp). Records the gap between authentication success and utmp entry appearance as `ssh_login_setup_seconds`, and the number of failures before success as `ssh_auth_attempts_before_success`. |
-
-### Data flow
-
-On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it against the previous one, and derives connection/disconnection events and session durations. Auth log processing runs in a separate goroutine and updates counters immediately as each `AuthEvent` arrives. If the auth log is unavailable, the exporter falls back gracefully to utmp-only metrics.
-
-## Data Sources
-
-- **utmp** (`/var/run/utmp`): Active session tracking, connection/disconnection detection, session duration calculation
-- **auth log** (`/var/log/auth.log` or `/var/log/secure`): Authentication failure events with method details
-
-The auth log is optional — if unavailable, the exporter continues with utmp-based metrics only.
-
-### Limitations of utmp-based event detection
-
-Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_total`) and session duration (`ssh_session_duration_seconds`) are derived by diffing utmp snapshots between scrapes. This means:
-
-- Sessions that start and end between two scrapes are not observed.
-- Pre-existing sessions at exporter startup are treated as baseline and not counted as new connections. Their disconnections are counted if they end while the exporter is running.
+Prometheus exporter for SSH session and authentication monitoring on Linux servers. Exposes session lifecycle metrics (active sessions, durations, connection events) from `/var/run/utmp` and authentication metrics (failures, invalid users, pre-auth disconnects) from `/var/log/auth.log`.
 
 ## Installation
 
@@ -87,14 +25,12 @@ make build
 ssh_session_exporter [flags]
 ```
 
-### Flags
-
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--web.listen-address` | `:9842` | Address to listen on |
 | `--web.telemetry-path` | `/metrics` | Path for metrics endpoint |
 | `--utmp.path` | `/var/run/utmp` | Path to utmp file |
-| `--auth-log.path` | `/var/log/auth.log` | Path to auth log file. When not explicitly set, the exporter also falls back to `/var/log/secure` if present |
+| `--auth-log.path` | `/var/log/auth.log` | Path to auth log file. When not explicitly set, falls back to `/var/log/secure` if present |
 
 ### Prometheus Configuration
 
@@ -127,9 +63,70 @@ Reading `/var/log/auth.log` requires root or membership in the `adm` group (Debi
 
 When `--auth-log.path` is left at its default, the exporter automatically uses `/var/log/secure` on RHEL/CentOS if `/var/log/auth.log` does not exist. If you set `--auth-log.path` explicitly, that path is used as-is.
 
-## Note on Label Cardinality
+## Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `ssh_sessions_active` | Gauge | `user`, `remote_ip`, `tty` | Currently active SSH sessions |
+| `ssh_sessions_count` | Gauge | - | Total number of currently active SSH sessions |
+| `ssh_auth_failures_total` | Counter | `user`, `remote_ip`, `method` | SSH authentication failures |
+| `ssh_auth_success_total` | Counter | `user`, `remote_ip`, `method` | Successful SSH authentications |
+| `ssh_invalid_user_attempts_total` | Counter | `user`, `remote_ip` | SSH authentication attempts for invalid users |
+| `ssh_preauth_disconnects_total` | Counter | `user`, `remote_ip` | SSH disconnections before authentication completed |
+| `ssh_connections_total` | Counter | `user`, `remote_ip` | SSH connections established (detected via utmp diff) |
+| `ssh_disconnections_total` | Counter | `user`, `remote_ip` | SSH disconnections (detected via utmp diff) |
+| `ssh_short_sessions_total` | Counter | `user`, `remote_ip` | SSH sessions that ended within 30 seconds |
+| `ssh_session_duration_seconds` | Histogram | `user` | Distribution of SSH session durations |
+| `ssh_login_setup_seconds` | Histogram | `user` | Time from authentication success to session appearing in utmp |
+| `ssh_auth_attempts_before_success` | Histogram | `user` | Failed authentication attempts before a successful login |
+| `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
+
+### Note on Label Cardinality
 
 The `remote_ip` label on counters may produce high cardinality if many unique IPs connect. Use Prometheus `metric_relabel_configs` to aggregate or drop this label if needed.
+
+### Limitations of utmp-based event detection
+
+Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_total`) and session duration (`ssh_session_duration_seconds`) are derived by diffing utmp snapshots between scrapes. This means:
+
+- Sessions that start and end between two scrapes are not observed.
+- Pre-existing sessions at exporter startup are treated as baseline and not counted as new connections. Their disconnections are counted if they end while the exporter is running.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        ssh_session_exporter                         │
+│                                                                     │
+│  /var/run/utmp ──→ utmp.Reader ──→ sessiontracker.Tracker ──┐      │
+│                    (binary parse)    (snapshot diff)         │      │
+│                                                              ▼      │
+│                                                   collector.SSHCollector ──→ /metrics
+│                                                              ▲      │
+│  /var/log/auth.log ──→ authlog.FileWatcher ──→ chan AuthEvent┘      │
+│  /var/log/secure       (tail + parse)                               │
+│  (optional)                                                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Sources
+
+- **utmp** (`/var/run/utmp`): Active session tracking, connection/disconnection detection, session duration calculation
+- **auth log** (`/var/log/auth.log` or `/var/log/secure`): Authentication failure events with method details
+
+The auth log is optional — if unavailable, the exporter continues with utmp-based metrics only.
+
+### Components
+
+| Component | Role |
+|-----------|------|
+| **utmp.Reader** | Parses the Linux utmp binary format (384-byte records). Identifies SSH sessions as entries with a non-empty `Host` field. |
+| **sessiontracker.Tracker** | Stateful snapshot diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against the previous state and returns a `SessionDelta` containing new and ended sessions (with duration). |
+| **authlog.FileWatcher** | Tails the auth log via polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines, extracts the sshd PID and syslog timestamp, and sends `AuthEvent` values to a channel. |
+| **collector.SSHCollector** | Implements `prometheus.Collector`. Processes utmp deltas on each scrape and consumes auth events in a background goroutine. Uses the PID correlator to compute metrics that span both data sources. |
+| **pidCorrelator** | Tracks per-PID state (failure count, auth-accept timestamp). Records the gap between authentication success and utmp entry appearance as `ssh_login_setup_seconds`, and the number of failures before success as `ssh_auth_attempts_before_success`. |
+
+On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it against the previous one, and derives connection/disconnection events and session durations. Auth log processing runs in a separate goroutine and updates counters immediately as each `AuthEvent` arrives.
 
 ## For Developers
 
