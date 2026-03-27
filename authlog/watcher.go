@@ -60,6 +60,7 @@ func (w *FileWatcher) run(ctx context.Context, f *os.File, offset int64) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	buf := make([]byte, 32*1024)
 	var partial string
 
 	for {
@@ -67,25 +68,6 @@ func (w *FileWatcher) run(ctx context.Context, f *os.File, offset int64) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			fi, statErr := os.Stat(w.path)
-			if statErr != nil {
-				w.logger.Warn("stat file", "error", statErr)
-				continue
-			}
-			if fi.Size() < offset {
-				// Log rotation detected: re-open from the beginning.
-				f.Close()
-				var err error
-				f, err = os.Open(w.path)
-				if err != nil {
-					w.logger.Warn("reopen file", "error", err)
-					continue
-				}
-				offset = 0
-				partial = ""
-			}
-
-			buf := make([]byte, 32*1024)
 			n, readErr := f.Read(buf)
 			if n > 0 {
 				offset += int64(n)
@@ -105,6 +87,25 @@ func (w *FileWatcher) run(ctx context.Context, f *os.File, offset int64) {
 			}
 			if readErr != nil && readErr != io.EOF {
 				w.logger.Warn("read error", "error", readErr)
+			}
+
+			// Check for log rotation only when at EOF (no new data).
+			if n == 0 {
+				fi, statErr := os.Stat(w.path)
+				if statErr != nil {
+					continue
+				}
+				if fi.Size() < offset {
+					f.Close()
+					var err error
+					f, err = os.Open(w.path)
+					if err != nil {
+						w.logger.Warn("reopen file", "error", err)
+						return
+					}
+					offset = 0
+					partial = ""
+				}
 			}
 		}
 	}
