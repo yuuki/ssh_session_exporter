@@ -22,9 +22,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.11.4
 
   test-e2e:
     runs-on: ubuntu-latest
