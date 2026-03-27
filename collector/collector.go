@@ -77,14 +77,6 @@ func New(
 		sessionDuration: sessionDuration,
 	}
 
-	// Read initial utmp snapshot as baseline so that pre-existing sessions
-	// are not counted as new connections on the first scrape.
-	if sessions, err := utmpReader.ReadSessions(); err != nil {
-		logger.Warn("failed to read initial utmp baseline", "error", err)
-	} else {
-		tracker.UpdateSessions(sessions)
-	}
-
 	for _, col := range []prometheus.Collector{authFailures, connections, disconnections, sessionDuration, c} {
 		if err := reg.Register(col); err != nil {
 			return nil, err

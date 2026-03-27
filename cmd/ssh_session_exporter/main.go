@@ -52,6 +52,13 @@ func main() {
 	utmpReader := utmp.NewFileReader(*utmpPath, logger)
 	tracker := sessiontracker.New(logger)
 
+	// Establish baseline: pre-existing sessions are not counted as new connections.
+	if sessions, err := utmpReader.ReadSessions(); err != nil {
+		logger.Warn("failed to read initial utmp baseline", "error", err)
+	} else {
+		tracker.Initialize(sessions)
+	}
+
 	// Prometheus registry.
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(prometheus.NewGoCollector())
