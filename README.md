@@ -26,7 +26,7 @@ The auth log is optional — if unavailable, the exporter continues with utmp-ba
 Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_total`) and session duration (`ssh_session_duration_seconds`) are derived by diffing utmp snapshots between scrapes. This means:
 
 - Sessions that start and end between two scrapes are not observed.
-- Pre-existing sessions at exporter startup are treated as baseline and not counted as new connections.
+- Pre-existing sessions at exporter startup are treated as baseline and not counted as new connections. Their disconnections are counted if they end while the exporter is running.
 
 ## Installation
 

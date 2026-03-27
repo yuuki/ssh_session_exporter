@@ -14,6 +14,31 @@ func newTestTracker(now time.Time) *Tracker {
 	return t
 }
 
+func TestInitialize(t *testing.T) {
+	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker := newTestTracker(now)
+
+	sessions := []utmp.Session{
+		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now.Add(-10 * time.Minute)},
+		{User: "bob", TTY: "pts/1", Host: "10.0.0.5", LoginTime: now.Add(-5 * time.Minute)},
+	}
+
+	tracker.Initialize(sessions)
+
+	if tracker.ActiveCount() != 2 {
+		t.Fatalf("expected 2 active sessions after Initialize, got %d", tracker.ActiveCount())
+	}
+
+	// UpdateSessions with the same set should produce no delta.
+	delta := tracker.UpdateSessions(sessions)
+	if len(delta.NewSessions) != 0 {
+		t.Errorf("expected 0 new sessions, got %d", len(delta.NewSessions))
+	}
+	if len(delta.EndedSessions) != 0 {
+		t.Errorf("expected 0 ended sessions, got %d", len(delta.EndedSessions))
+	}
+}
+
 func TestUpdateSessions_NewSessions(t *testing.T) {
 	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	tracker := newTestTracker(now)

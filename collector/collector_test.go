@@ -93,19 +93,19 @@ ssh_exporter_scrape_success 0
 func TestCollect_BaselineNotCounted(t *testing.T) {
 	reg := prometheus.NewPedanticRegistry()
 	now := time.Now()
-	reader := &mockReader{
-		sessions: []utmp.Session{
-			{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now},
-		},
+	baselineSessions := []utmp.Session{
+		{User: "alice", TTY: "pts/0", Host: "192.168.1.10", LoginTime: now},
 	}
+	reader := &mockReader{sessions: baselineSessions}
 	tracker := sessiontracker.New(slog.Default())
+	tracker.Initialize(baselineSessions)
 
 	c, err := New(reg, reader, tracker, slog.Default())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	// First scrape should NOT count the pre-existing session as a new connection.
+	// First scrape: baseline session still present — no connection or disconnection events.
 	ch := make(chan prometheus.Metric, 100)
 	c.Collect(ch)
 	close(ch)
@@ -116,6 +116,23 @@ func TestCollect_BaselineNotCounted(t *testing.T) {
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "ssh_connections_total"); err != nil {
 		t.Errorf("baseline sessions should not be counted as new connections:\n%v", err)
+	}
+
+	// Baseline session disappears on second scrape.
+	// The disconnection IS counted because the session ended while the exporter
+	// was running — only the initial connection event is suppressed.
+	reader.sessions = nil
+	ch = make(chan prometheus.Metric, 100)
+	c.Collect(ch)
+	close(ch)
+
+	disconnExpected := `
+# HELP ssh_disconnections_total Total number of SSH disconnections.
+# TYPE ssh_disconnections_total counter
+ssh_disconnections_total{remote_ip="192.168.1.10",user="alice"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(disconnExpected), "ssh_disconnections_total"); err != nil {
+		t.Errorf("disconnection of baseline session should be counted:\n%v", err)
 	}
 }
 
