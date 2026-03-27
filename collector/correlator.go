@@ -11,7 +11,6 @@ type pidState struct {
 	createdAt      time.Time
 }
 
-// pidCorrelator tracks per-PID state to correlate auth log events with utmp sessions.
 type pidCorrelator struct {
 	mu   sync.Mutex
 	pids map[int32]*pidState
@@ -25,7 +24,6 @@ func newPIDCorrelator(ttl time.Duration) *pidCorrelator {
 	}
 }
 
-// RecordFailure increments the failed attempt counter for a PID.
 func (c *pidCorrelator) RecordFailure(pid int32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -37,8 +35,7 @@ func (c *pidCorrelator) RecordFailure(pid int32) {
 	s.failedAttempts++
 }
 
-// RecordAccept stores the acceptance timestamp for a PID and returns
-// the number of prior failed attempts.
+// RecordAccept stores the accept timestamp and returns the number of prior failed attempts.
 func (c *pidCorrelator) RecordAccept(pid int32, acceptTime time.Time) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -51,8 +48,6 @@ func (c *pidCorrelator) RecordAccept(pid int32, acceptTime time.Time) int {
 	return s.failedAttempts
 }
 
-// ConsumeAccept retrieves and removes the accept timestamp for a PID.
-// Returns zero time and false if the PID has no recorded accept.
 func (c *pidCorrelator) ConsumeAccept(pid int32) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -65,7 +60,6 @@ func (c *pidCorrelator) ConsumeAccept(pid int32) (time.Time, bool) {
 	return t, true
 }
 
-// Cleanup removes entries older than the configured TTL.
 func (c *pidCorrelator) Cleanup() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -33,11 +33,9 @@ func parsePID(s string) int32 {
 	return int32(n)
 }
 
-// reTimestamp matches the syslog timestamp at the beginning of a line.
 var reTimestamp = regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})`)
 
-// parseTimestamp extracts and parses the syslog timestamp from a log line.
-// Returns zero time if the timestamp cannot be parsed.
+// parseTimestamp extracts the syslog timestamp from a log line.
 // Auth log timestamps lack a year, so the current year is assumed.
 func parseTimestamp(line string) time.Time {
 	m := reTimestamp.FindStringSubmatch(line)
@@ -69,8 +67,6 @@ func ParseLine(line string) *AuthEvent {
 		return nil
 	}
 
-	ts := parseTimestamp(line)
-
 	if m := reFailedAuth.FindStringSubmatch(line); m != nil {
 		return &AuthEvent{
 			Type:      EventAuthFailure,
@@ -78,7 +74,7 @@ func ParseLine(line string) *AuthEvent {
 			Method:    m[2],
 			User:      m[3],
 			RemoteIP:  m[4],
-			Timestamp: ts,
+			Timestamp: parseTimestamp(line),
 		}
 	}
 
@@ -89,7 +85,7 @@ func ParseLine(line string) *AuthEvent {
 			Method:    m[2],
 			User:      m[3],
 			RemoteIP:  m[4],
-			Timestamp: ts,
+			Timestamp: parseTimestamp(line),
 		}
 	}
 
@@ -99,7 +95,7 @@ func ParseLine(line string) *AuthEvent {
 			PID:       parsePID(m[1]),
 			User:      m[2],
 			RemoteIP:  m[3],
-			Timestamp: ts,
+			Timestamp: parseTimestamp(line),
 		}
 	}
 
@@ -109,7 +105,7 @@ func ParseLine(line string) *AuthEvent {
 			PID:       parsePID(m[1]),
 			User:      m[2],
 			RemoteIP:  m[3],
-			Timestamp: ts,
+			Timestamp: parseTimestamp(line),
 		}
 	}
 

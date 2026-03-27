@@ -11,7 +11,12 @@ import (
 	"github.com/yuuki/ssh_session_exporter/utmp"
 )
 
-const shortSessionThreshold = 30 * time.Second
+const (
+	shortSessionThreshold = 30 * time.Second
+	// correlatorTTL bounds memory usage: entries from PIDs that never complete
+	// auth (e.g., brute-force attempts) are evicted after this duration.
+	correlatorTTL = 5 * time.Minute
+)
 
 var (
 	sessionsActiveDesc = prometheus.NewDesc(
@@ -113,7 +118,7 @@ func New(
 		utmpReader:         utmpReader,
 		tracker:            tracker,
 		logger:             logger,
-		correlator:         newPIDCorrelator(5 * time.Minute),
+		correlator:         newPIDCorrelator(correlatorTTL),
 		authFailures:       authFailures,
 		authSuccesses:      authSuccesses,
 		invalidUsers:       invalidUsers,
