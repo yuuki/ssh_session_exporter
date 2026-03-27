@@ -4,27 +4,21 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/nxadm/tail"
 )
 
-// Watcher watches an auth log file for SSH events.
-type Watcher interface {
-	Events() <-chan AuthEvent
-	Start(ctx context.Context) error
-	Stop()
-}
-
-// FileWatcher tails an auth log file and emits parsed SSH events.
+// FileWatcher tails an auth log file and emits parsed SSH failure events.
 type FileWatcher struct {
 	path   string
 	events chan AuthEvent
 	tail   *tail.Tail
 	logger *slog.Logger
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
-// NewFileWatcher creates a new FileWatcher for the given auth log path.
 func NewFileWatcher(path string, logger *slog.Logger) *FileWatcher {
 	return &FileWatcher{
 		path:   path,
@@ -33,13 +27,12 @@ func NewFileWatcher(path string, logger *slog.Logger) *FileWatcher {
 	}
 }
 
-// Events returns the channel of parsed auth events.
 func (w *FileWatcher) Events() <-chan AuthEvent {
 	return w.events
 }
 
-// Start begins tailing the auth log file. It reads from the end of the file
-// and follows new lines, handling log rotation via ReOpen.
+// Start begins tailing the auth log file from the end,
+// handling log rotation via ReOpen.
 func (w *FileWatcher) Start(ctx context.Context) error {
 	ctx, w.cancel = context.WithCancel(ctx)
 
@@ -56,11 +49,13 @@ func (w *FileWatcher) Start(ctx context.Context) error {
 	}
 	w.tail = t
 
+	w.wg.Add(1)
 	go w.run(ctx)
 	return nil
 }
 
 func (w *FileWatcher) run(ctx context.Context) {
+	defer w.wg.Done()
 	defer close(w.events)
 
 	for {
@@ -88,7 +83,6 @@ func (w *FileWatcher) run(ctx context.Context) {
 	}
 }
 
-// Stop stops tailing the auth log file.
 func (w *FileWatcher) Stop() {
 	if w.cancel != nil {
 		w.cancel()
@@ -97,4 +91,5 @@ func (w *FileWatcher) Stop() {
 		w.tail.Stop()
 		w.tail.Cleanup()
 	}
+	w.wg.Wait()
 }
