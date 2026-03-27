@@ -13,9 +13,15 @@ Prometheus exporter for monitoring SSH sessions and authentication events on Lin
 | `ssh_sessions_active` | Gauge | `user`, `remote_ip`, `tty` | Currently active SSH sessions |
 | `ssh_sessions_count` | Gauge | - | Total number of currently active SSH sessions |
 | `ssh_auth_failures_total` | Counter | `user`, `remote_ip`, `method` | SSH authentication failures |
+| `ssh_auth_success_total` | Counter | `user`, `remote_ip`, `method` | Successful SSH authentications |
+| `ssh_invalid_user_attempts_total` | Counter | `user`, `remote_ip` | SSH authentication attempts for invalid users |
+| `ssh_preauth_disconnects_total` | Counter | `user`, `remote_ip` | SSH disconnections before authentication completed |
 | `ssh_connections_total` | Counter | `user`, `remote_ip` | SSH connections established (detected via utmp diff) |
 | `ssh_disconnections_total` | Counter | `user`, `remote_ip` | SSH disconnections (detected via utmp diff) |
-| `ssh_session_duration_seconds` | Histogram | `user` | Distribution of session durations |
+| `ssh_short_sessions_total` | Counter | `user`, `remote_ip` | SSH sessions that ended within 30 seconds |
+| `ssh_session_duration_seconds` | Histogram | `user` | Distribution of SSH session durations |
+| `ssh_login_setup_seconds` | Histogram | `user` | Time from authentication success to session appearing in utmp |
+| `ssh_auth_attempts_before_success` | Histogram | `user` | Failed authentication attempts before a successful login |
 | `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
 
 ## Data Sources
