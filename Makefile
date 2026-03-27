@@ -5,7 +5,7 @@ GOOS   := linux
 .PHONY: build test lint clean install
 
 build:
-	GOOS=$(GOOS) go build -o $(BINARY) ./cmd/ssh_session_exporter
+	GOOS=$(GOOS) go build -o $(BINARY) .
 
 test:
 	go test ./...
@@ -17,4 +17,4 @@ clean:
 	rm -f $(BINARY)
 
 install:
-	GOOS=$(GOOS) go install ./cmd/ssh_session_exporter
+	GOOS=$(GOOS) go install .

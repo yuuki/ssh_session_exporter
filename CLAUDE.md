@@ -11,7 +11,7 @@ make lint           # golangci-lint run ./...
 go test ./authlog/  # Run tests for a single package
 go test ./collector/ -run TestCollect_ActiveSessions  # Run a single test
 GOOS=linux go vet ./...   # Vet all packages (must target Linux)
-GOOS=linux go build -o /dev/null ./cmd/ssh_session_exporter  # Verify compilation
+GOOS=linux go build -o /dev/null .  # Verify compilation
 ```
 
 The `utmp` and `cmd` packages have `//go:build linux` constraints. Use `GOOS=linux` for vet/build. Tests in `utmp/` are skipped on macOS — this is expected.
