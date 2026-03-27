@@ -1,11 +1,13 @@
-BINARY := ssh_session_exporter
-MODULE := github.com/yuuki/ssh_sesshon_exporter
-GOOS   := linux
+BINARY  := ssh_session_exporter
+MODULE  := github.com/yuuki/ssh_sesshon_exporter
+GOOS    := linux
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -X main.version=$(VERSION)
 
 .PHONY: build test vet clean install test-e2e
 
 build:
-	GOOS=$(GOOS) go build -o $(BINARY) .
+	GOOS=$(GOOS) go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 test:
 	go test ./...

@@ -22,6 +22,9 @@ import (
 	"github.com/yuuki/ssh_sesshon_exporter/utmp"
 )
 
+// version is set at build time via -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 var (
 	listenAddress = flag.String("web.listen-address", ":9842",
 		"Address to listen on for web interface and telemetry.")
@@ -31,10 +34,16 @@ var (
 		"Path to the utmp file.")
 	authLogPath = flag.String("auth-log.path", "/var/log/auth.log",
 		"Path to the auth log file.")
+	showVersion = flag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
