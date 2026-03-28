@@ -42,6 +42,8 @@ Optional environment variables:
 - `ROCKY_LIMA_METRICS_PORT` - Host port forwarded to guest `:9842`
 - `ROCKY_LIMA_SSH_PORT` - Host port used for the Lima SSH endpoint
 
+This suite intentionally does not use Lima `--plain`. The harness depends on Lima-managed SSH config, host-to-guest port forwarding for `/metrics`, and `limactl copy` during guest initialization.
+
 Failure artifacts are written to `.e2e-artifacts/rocky-lima/<instance>/`.
 
 ## Usage

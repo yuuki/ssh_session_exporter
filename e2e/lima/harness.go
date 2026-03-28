@@ -182,6 +182,8 @@ func renderTemplate(cfg config, instanceName string, probeAuthorizedKey string) 
 func (h *harness) Start(t *testing.T, exporterArgs ...string) error {
 	t.Helper()
 
+	// Do not use --plain here. This harness intentionally relies on Lima-managed
+	// SSH config, port forwarding for the metrics endpoint, and limactl copy.
 	if err := h.run("limactl", "create", "-y", "--name", h.instanceName, "--mount-none", h.templatePath); err != nil {
 		return fmt.Errorf("limactl create: %w", err)
 	}
