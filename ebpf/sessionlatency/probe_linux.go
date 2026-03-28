@@ -22,6 +22,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const cleanupInterval = 5 * time.Second
+
 type Probe struct {
 	logger    *slog.Logger
 	processor *processor
@@ -154,7 +156,7 @@ func (p *Probe) Close() {
 func (p *Probe) runCleanup(ctx context.Context) {
 	defer p.wg.Done()
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -168,20 +170,22 @@ func (p *Probe) runCleanup(ctx context.Context) {
 
 func (p *Probe) runRingbuf() {
 	defer p.wg.Done()
+	var raw rawEvent
+	br := bytes.NewReader(nil)
 	for {
 		record, err := p.reader.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				return
 			}
-			p.processor.failures.WithLabelValues("events_dropped").Inc()
+			p.processor.failures.WithLabelValues(failureEventsDropped).Inc()
 			p.logger.Warn("failed to read eBPF ringbuf", "error", err)
 			continue
 		}
 
-		var raw rawEvent
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &raw); err != nil {
-			p.processor.failures.WithLabelValues("events_dropped").Inc()
+		br.Reset(record.RawSample)
+		if err := binary.Read(br, binary.LittleEndian, &raw); err != nil {
+			p.processor.failures.WithLabelValues(failureEventsDropped).Inc()
 			p.logger.Warn("failed to decode eBPF event", "error", err)
 			continue
 		}
