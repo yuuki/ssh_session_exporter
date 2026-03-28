@@ -1,5 +1,3 @@
-//go:build linux
-
 package utmp
 
 import (
@@ -25,6 +23,26 @@ func makeRecord(typ int16, pid int32, user, line, host string, sec int32) []byte
 	}
 	if buf.Len() != recordSize {
 		panic("unexpected record size")
+	}
+	return buf.Bytes()
+}
+
+func makeRecordTime64(typ int16, pid int32, user, line, host string, sec int64) []byte {
+	rec := rawRecordTime64{
+		Type:  typ,
+		PID:   pid,
+		TvSec: sec,
+	}
+	copy(rec.User[:], user)
+	copy(rec.Line[:], line)
+	copy(rec.Host[:], host)
+
+	var buf bytes.Buffer
+	if err := binary.Write(&buf, binary.LittleEndian, &rec); err != nil {
+		panic(err)
+	}
+	if buf.Len() != recordSizeTime64 {
+		panic("unexpected time64 record size")
 	}
 	return buf.Bytes()
 }
@@ -117,6 +135,22 @@ func TestParseRecords_TruncatedInput(t *testing.T) {
 	// Should return whatever was parsed before the error
 	if len(sessions) != 0 {
 		t.Fatalf("expected 0 sessions, got %d", len(sessions))
+	}
+}
+
+func TestParseRecords_Time64Record(t *testing.T) {
+	data := make([]byte, 0)
+	data = append(data, makeRecordTime64(userProcess, 1234, "probe", "pts/0", "192.168.5.2", 1700000000)...)
+
+	sessions, err := parseRecords(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].User != "probe" || sessions[0].Host != "192.168.5.2" || sessions[0].PID != 1234 {
+		t.Fatalf("unexpected session: %+v", sessions[0])
 	}
 }
 

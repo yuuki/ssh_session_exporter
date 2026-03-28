@@ -43,10 +43,10 @@ func parseTimestamp(line string) time.Time {
 	if m == nil {
 		return time.Time{}
 	}
-	t, err := time.Parse("Jan  2 15:04:05", m[1])
+	t, err := time.ParseInLocation("Jan  2 15:04:05", m[1], time.Local)
 	if err != nil {
 		// Try single-digit day with single space (e.g., "Jan 1 12:00:00").
-		t, err = time.Parse("Jan 2 15:04:05", m[1])
+		t, err = time.ParseInLocation("Jan 2 15:04:05", m[1], time.Local)
 		if err != nil {
 			return time.Time{}
 		}

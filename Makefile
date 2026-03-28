@@ -4,7 +4,7 @@ GOOS    := linux
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build test vet clean install test-e2e
+.PHONY: build test vet clean install test-e2e test-e2e-rocky
 
 build:
 	GOOS=$(GOOS) go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -23,3 +23,6 @@ install:
 
 test-e2e:
 	go test -tags e2e -v -count=1 -timeout 120s ./e2e/
+
+test-e2e-rocky:
+	go test -tags e2e_rocky -v -count=1 -timeout 30m ./e2e/lima/

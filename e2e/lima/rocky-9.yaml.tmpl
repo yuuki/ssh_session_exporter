@@ -1,0 +1,47 @@
+minimumLimaVersion: 2.0.0
+
+base:
+- template:rocky-9
+
+containerd:
+  system: false
+  user: false
+
+mounts: []
+
+ssh:
+  localPort: {{.SSHPort}}
+  loadDotSSHPubKeys: false
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    dnf install -y rsyslog procps-ng util-linux
+    install -m 0600 /dev/null /var/log/secure
+    cat >/etc/rsyslog.d/99-ssh-session-exporter.conf <<'EOF'
+    authpriv.* /var/log/secure
+    EOF
+    systemctl enable --now rsyslog
+    systemctl restart rsyslog
+    id -u probe >/dev/null 2>&1 || useradd -m probe
+    install -d -m 0700 -o probe -g probe /home/probe/.ssh
+    cat >/home/probe/.ssh/authorized_keys <<'EOF'
+    {{.ProbeAuthorizedKey}}
+    EOF
+    chown probe:probe /home/probe/.ssh/authorized_keys
+    chmod 0600 /home/probe/.ssh/authorized_keys
+
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    systemctl is-active --quiet sshd
+    systemctl is-active --quiet rsyslog
+    test -f /var/log/secure
+  hint: See "/var/log/cloud-init-output.log" in the guest.
+
+portForwards:
+- guestPort: 9842
+  hostPort: {{.MetricsPort}}

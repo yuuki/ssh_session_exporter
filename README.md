@@ -19,6 +19,31 @@ Or build from source:
 make build
 ```
 
+### Rocky Linux 9.6 Reproduction E2E
+
+For production-faithful SSH login reproduction on macOS, a separate Lima-based E2E suite boots a Rocky Linux 9.6 VM and uses a real `sshd`, `/var/log/secure`, and `utmp`.
+
+Prerequisites:
+
+- `limactl` 2.0+
+- `ssh`
+- macOS host with Lima support
+
+Run:
+
+```bash
+make test-e2e-rocky
+```
+
+Optional environment variables:
+
+- `ROCKY_LIMA_INSTANCE_PREFIX` - Lima instance name prefix
+- `ROCKY_LIMA_KEEP_FAILED=1` - Keep the VM after a failed run
+- `ROCKY_LIMA_METRICS_PORT` - Host port forwarded to guest `:9842`
+- `ROCKY_LIMA_SSH_PORT` - Host port used for the Lima SSH endpoint
+
+Failure artifacts are written to `.e2e-artifacts/rocky-lima/<instance>/`.
+
 ## Usage
 
 ```bash

@@ -264,3 +264,25 @@ func TestParseTimestamp(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTimestamp_UsesLocalTimezone(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("JST", 9*60*60)
+	t.Cleanup(func() {
+		time.Local = originalLocal
+	})
+
+	ts := parseTimestamp("Mar 28 16:48:13 server sshd[1234]: something")
+	if ts.IsZero() {
+		t.Fatal("expected non-zero time")
+	}
+
+	if got, want := ts.Location(), time.Local; got != want {
+		t.Fatalf("Location = %v, want %v", got, want)
+	}
+
+	want := time.Date(ts.Year(), time.March, 28, 16, 48, 13, 0, time.Local)
+	if !ts.Equal(want) {
+		t.Fatalf("Timestamp = %v, want %v", ts, want)
+	}
+}
