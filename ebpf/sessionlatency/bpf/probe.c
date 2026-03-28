@@ -40,6 +40,7 @@ struct trace_event_raw_sys_enter {
   __u8 common_flags;
   __u8 common_preempt_count;
   __s32 common_pid;
+  // RHEL/Rocky include common_preempt_lazy_count here, so the raw struct must match to keep offsets correct.
   __u8 common_preempt_lazy_count;
   __u8 __pad[3];
   __s32 id;
@@ -188,8 +189,7 @@ static __always_inline void fill_comm_from_exec_filename(char dst[TASK_COMM_LEN]
   bpf_probe_read_kernel_str(dst, TASK_COMM_LEN, ((const char *)ctx) + offset);
 }
 
-SEC("tracepoint/syscalls/sys_enter_accept4")
-int trace_enter_accept4(struct trace_event_raw_sys_enter *ctx) {
+static __always_inline int handle_accept_enter(struct trace_event_raw_sys_enter *ctx) {
   __u64 pid_tgid = bpf_get_current_pid_tgid();
   struct accept_args args = {};
 
@@ -203,73 +203,50 @@ int trace_enter_accept4(struct trace_event_raw_sys_enter *ctx) {
   return 0;
 }
 
+SEC("tracepoint/syscalls/sys_enter_accept4")
+int trace_enter_accept4(struct trace_event_raw_sys_enter *ctx) {
+  return handle_accept_enter(ctx);
+}
+
 SEC("tracepoint/syscalls/sys_enter_accept")
 int trace_enter_accept(struct trace_event_raw_sys_enter *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  struct accept_args args = {};
+  return handle_accept_enter(ctx);
+}
 
-  if (!current_is_sshd()) {
+static __always_inline int handle_accept_exit(struct trace_event_raw_sys_exit *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  struct accept_args *args;
+  struct event ev = {};
+
+  if (ctx->ret < 0) {
+    bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
     return 0;
   }
 
-  args.upeer_sockaddr = (__u64)ctx->args[1];
-  args.upeer_addrlen = (__u64)ctx->args[2];
-  bpf_map_update_elem(&inflight_accepts, &pid_tgid, &args, BPF_ANY);
+  args = bpf_map_lookup_elem(&inflight_accepts, &pid_tgid);
+  if (!args) {
+    return 0;
+  }
+
+  ev.kind = EVENT_ACCEPT;
+  ev.pid = pid_tgid >> 32;
+  ev.ts_ns = bpf_ktime_get_ns();
+
+  if (fill_addr(&ev, args)) {
+    submit_event(&ev);
+  }
+  bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
   return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_accept4")
 int trace_exit_accept4(struct trace_event_raw_sys_exit *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  struct accept_args *args;
-  struct event ev = {};
-
-  if (ctx->ret < 0) {
-    bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
-    return 0;
-  }
-
-  args = bpf_map_lookup_elem(&inflight_accepts, &pid_tgid);
-  if (!args) {
-    return 0;
-  }
-
-  ev.kind = EVENT_ACCEPT;
-  ev.pid = pid_tgid >> 32;
-  ev.ts_ns = bpf_ktime_get_ns();
-
-  if (fill_addr(&ev, args)) {
-    submit_event(&ev);
-  }
-  bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
-  return 0;
+  return handle_accept_exit(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_accept")
 int trace_exit_accept(struct trace_event_raw_sys_exit *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  struct accept_args *args;
-  struct event ev = {};
-
-  if (ctx->ret < 0) {
-    bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
-    return 0;
-  }
-
-  args = bpf_map_lookup_elem(&inflight_accepts, &pid_tgid);
-  if (!args) {
-    return 0;
-  }
-
-  ev.kind = EVENT_ACCEPT;
-  ev.pid = pid_tgid >> 32;
-  ev.ts_ns = bpf_ktime_get_ns();
-
-  if (fill_addr(&ev, args)) {
-    submit_event(&ev);
-  }
-  bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
-  return 0;
+  return handle_accept_exit(ctx);
 }
 
 SEC("tracepoint/sched/sched_process_fork")
@@ -294,6 +271,7 @@ int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
   ev.pid = ctx->pid;
   ev.uid = (__u32)bpf_get_current_uid_gid();
   ev.ts_ns = bpf_ktime_get_ns();
+  // On Rocky, bpf_get_current_comm() can be empty here, so prefer the exec filename when available.
   fill_comm_from_exec_filename(ev.comm, ctx);
   if (ev.comm[0] == '\0') {
     bpf_get_current_comm(ev.comm, sizeof(ev.comm));
@@ -317,86 +295,63 @@ int trace_tty_write(struct trace_event_raw_tty_write *ctx) {
   return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_write")
-int trace_enter_write(struct trace_event_raw_sys_enter *ctx) {
+static __always_inline int handle_write_enter(struct trace_event_raw_sys_enter *ctx) {
   __u64 pid_tgid = bpf_get_current_pid_tgid();
   __s64 fd = (__s64)ctx->args[0];
 
   bpf_map_update_elem(&inflight_writes, &pid_tgid, &fd, BPF_ANY);
   return 0;
+}
+
+static __always_inline int handle_write_exit(struct trace_event_raw_sys_exit *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  __s64 *fdp;
+  struct event ev = {};
+
+  if (ctx->ret <= 0) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  fdp = bpf_map_lookup_elem(&inflight_writes, &pid_tgid);
+  if (!fdp) {
+    return 0;
+  }
+
+  if (*fdp != 1 && *fdp != 2) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  ev.kind = EVENT_TTY_WRITE;
+  ev.pid = pid_tgid >> 32;
+  ev.uid = (__u32)bpf_get_current_uid_gid();
+  ev.bytes = ctx->ret;
+  ev.ts_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+  submit_event(&ev);
+  bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_write")
+int trace_enter_write(struct trace_event_raw_sys_enter *ctx) {
+  return handle_write_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_write")
 int trace_exit_write(struct trace_event_raw_sys_exit *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  __s64 *fdp;
-  struct event ev = {};
-
-  if (ctx->ret <= 0) {
-    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-    return 0;
-  }
-
-  fdp = bpf_map_lookup_elem(&inflight_writes, &pid_tgid);
-  if (!fdp) {
-    return 0;
-  }
-
-  if (*fdp != 1 && *fdp != 2) {
-    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-    return 0;
-  }
-
-  ev.kind = EVENT_TTY_WRITE;
-  ev.pid = pid_tgid >> 32;
-  ev.uid = (__u32)bpf_get_current_uid_gid();
-  ev.bytes = ctx->ret;
-  ev.ts_ns = bpf_ktime_get_ns();
-  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
-  submit_event(&ev);
-  bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-  return 0;
+  return handle_write_exit(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_enter_writev")
 int trace_enter_writev(struct trace_event_raw_sys_enter *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  __s64 fd = (__s64)ctx->args[0];
-
-  bpf_map_update_elem(&inflight_writes, &pid_tgid, &fd, BPF_ANY);
-  return 0;
+  return handle_write_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_writev")
 int trace_exit_writev(struct trace_event_raw_sys_exit *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
-  __s64 *fdp;
-  struct event ev = {};
-
-  if (ctx->ret <= 0) {
-    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-    return 0;
-  }
-
-  fdp = bpf_map_lookup_elem(&inflight_writes, &pid_tgid);
-  if (!fdp) {
-    return 0;
-  }
-
-  if (*fdp != 1 && *fdp != 2) {
-    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-    return 0;
-  }
-
-  ev.kind = EVENT_TTY_WRITE;
-  ev.pid = pid_tgid >> 32;
-  ev.uid = (__u32)bpf_get_current_uid_gid();
-  ev.bytes = ctx->ret;
-  ev.ts_ns = bpf_ktime_get_ns();
-  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
-  submit_event(&ev);
-  bpf_map_delete_elem(&inflight_writes, &pid_tgid);
-  return 0;
+  return handle_write_exit(ctx);
 }
 
 SEC("tracepoint/sched/sched_process_exit")
