@@ -21,13 +21,13 @@ make build
 
 ### Rocky Linux 9.6 Reproduction E2E
 
-For production-faithful SSH login reproduction on macOS, a separate Lima-based E2E suite boots a Rocky Linux 9.6 VM and uses a real `sshd`, `/var/log/secure`, and `utmp`.
+For production-faithful SSH login reproduction on Linux or macOS, a separate Lima-based E2E suite boots a Rocky Linux 9.6 VM and uses a real `sshd`, `/var/log/secure`, and `utmp`. The same suite also runs in GitHub Actions on a dedicated Ubuntu job via Lima.
 
 Prerequisites:
 
 - `limactl` 2.0+
 - `ssh`
-- macOS host with Lima support
+- Linux or macOS host with Lima support
 
 Run:
 

@@ -86,8 +86,8 @@ func loadConfigFromEnv() (config, error) {
 func newHarness(t *testing.T) (*harness, error) {
 	t.Helper()
 
-	if runtime.GOOS != "darwin" {
-		t.Skip("Rocky Lima e2e is supported only on macOS hosts")
+	if !supportsHostOS(runtimeGOOS()) {
+		t.Skip("Rocky Lima e2e requires a Linux or macOS host with limactl")
 	}
 	if _, err := exec.LookPath("limactl"); err != nil {
 		t.Skip("limactl is not installed")
@@ -151,6 +151,14 @@ func newHarness(t *testing.T) (*harness, error) {
 	})
 
 	return h, nil
+}
+
+func supportsHostOS(goos string) bool {
+	return goos == "darwin" || goos == "linux"
+}
+
+var runtimeGOOS = func() string {
+	return runtime.GOOS
 }
 
 func renderTemplate(cfg config, instanceName string, probeAuthorizedKey string) (string, error) {

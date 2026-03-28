@@ -61,6 +61,24 @@ func TestRenderTemplate(t *testing.T) {
 	}
 }
 
+func TestSupportsHostOS(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		goos string
+		want bool
+	}{
+		{name: "darwin", goos: "darwin", want: true},
+		{name: "linux", goos: "linux", want: true},
+		{name: "windows", goos: "windows", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := supportsHostOS(tc.goos); got != tc.want {
+				t.Fatalf("supportsHostOS(%q) = %v, want %v", tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRockyLimaE2E_FailureArtifacts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Lima artifact test in short mode")
