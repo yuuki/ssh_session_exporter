@@ -71,10 +71,12 @@ func parseRecords(data []byte) ([]Session, error) {
 }
 
 func parseRecords32(data []byte) ([]Session, error) {
-	var sessions []Session
-	for offset := 0; offset < len(data); offset += recordSize {
+	n := len(data) / recordSize
+	sessions := make([]Session, 0, n)
+	reader := bytes.NewReader(data)
+	for i := 0; i < n; i++ {
 		var rec rawRecord
-		if err := binary.Read(bytes.NewReader(data[offset:offset+recordSize]), binary.LittleEndian, &rec); err != nil {
+		if err := binary.Read(reader, binary.LittleEndian, &rec); err != nil {
 			return sessions, fmt.Errorf("parse utmp record: %w", err)
 		}
 		sessions = appendSession32(sessions, rec)
@@ -83,10 +85,12 @@ func parseRecords32(data []byte) ([]Session, error) {
 }
 
 func parseRecordsTime64(data []byte) ([]Session, error) {
-	var sessions []Session
-	for offset := 0; offset < len(data); offset += recordSizeTime64 {
+	n := len(data) / recordSizeTime64
+	sessions := make([]Session, 0, n)
+	reader := bytes.NewReader(data)
+	for i := 0; i < n; i++ {
 		var rec rawRecordTime64
-		if err := binary.Read(bytes.NewReader(data[offset:offset+recordSizeTime64]), binary.LittleEndian, &rec); err != nil {
+		if err := binary.Read(reader, binary.LittleEndian, &rec); err != nil {
 			return sessions, fmt.Errorf("parse utmp record: %w", err)
 		}
 		sessions = appendSessionTime64(sessions, rec)
