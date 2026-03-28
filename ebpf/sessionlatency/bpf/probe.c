@@ -82,6 +82,13 @@ struct {
 } inflight_accepts SEC(".maps");
 
 struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 8192);
+  __type(key, __u64);
+  __type(value, __s64);
+} inflight_writes SEC(".maps");
+
+struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 1 << 24);
 } events SEC(".maps");
@@ -234,6 +241,88 @@ int trace_tty_write(struct trace_event_raw_tty_write *ctx) {
   ev.ts_ns = bpf_ktime_get_ns();
   bpf_get_current_comm(ev.comm, sizeof(ev.comm));
   submit_event(&ev);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_write")
+int trace_enter_write(struct trace_event_raw_sys_enter *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  __s64 fd = (__s64)ctx->args[0];
+
+  bpf_map_update_elem(&inflight_writes, &pid_tgid, &fd, BPF_ANY);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_write")
+int trace_exit_write(struct trace_event_raw_sys_exit *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  __s64 *fdp;
+  struct event ev = {};
+
+  if (ctx->ret <= 0) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  fdp = bpf_map_lookup_elem(&inflight_writes, &pid_tgid);
+  if (!fdp) {
+    return 0;
+  }
+
+  if (*fdp != 1 && *fdp != 2) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  ev.kind = EVENT_TTY_WRITE;
+  ev.pid = pid_tgid >> 32;
+  ev.uid = (__u32)bpf_get_current_uid_gid();
+  ev.bytes = ctx->ret;
+  ev.ts_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+  submit_event(&ev);
+  bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_writev")
+int trace_enter_writev(struct trace_event_raw_sys_enter *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  __s64 fd = (__s64)ctx->args[0];
+
+  bpf_map_update_elem(&inflight_writes, &pid_tgid, &fd, BPF_ANY);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_writev")
+int trace_exit_writev(struct trace_event_raw_sys_exit *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  __s64 *fdp;
+  struct event ev = {};
+
+  if (ctx->ret <= 0) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  fdp = bpf_map_lookup_elem(&inflight_writes, &pid_tgid);
+  if (!fdp) {
+    return 0;
+  }
+
+  if (*fdp != 1 && *fdp != 2) {
+    bpf_map_delete_elem(&inflight_writes, &pid_tgid);
+    return 0;
+  }
+
+  ev.kind = EVENT_TTY_WRITE;
+  ev.pid = pid_tgid >> 32;
+  ev.uid = (__u32)bpf_get_current_uid_gid();
+  ev.bytes = ctx->ret;
+  ev.ts_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+  submit_event(&ev);
+  bpf_map_delete_elem(&inflight_writes, &pid_tgid);
   return 0;
 }
 

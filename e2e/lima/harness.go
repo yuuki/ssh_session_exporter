@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -171,7 +171,7 @@ func renderTemplate(cfg config, instanceName string, probeAuthorizedKey string) 
 	return buf.String(), nil
 }
 
-func (h *harness) Start(t *testing.T) error {
+func (h *harness) Start(t *testing.T, exporterArgs ...string) error {
 	t.Helper()
 
 	if err := h.run("limactl", "create", "-y", "--name", h.instanceName, "--mount-none", h.templatePath); err != nil {
@@ -204,7 +204,15 @@ func (h *harness) Start(t *testing.T) error {
 	if _, err := h.guestRootOutput("pkill -x ssh_session_exporter || true"); err != nil {
 		return fmt.Errorf("stop previous exporter: %w", err)
 	}
-	if _, err := h.guestRootOutput("nohup /usr/local/bin/ssh_session_exporter --web.listen-address=:" + strconv.Itoa(exporterPort) + " --auth-log.path=/var/log/secure >/tmp/ssh_session_exporter.log 2>&1 < /dev/null &"); err != nil {
+	exporterCmd := []string{
+		"nohup",
+		"/usr/local/bin/ssh_session_exporter",
+		"--web.listen-address=:" + strconv.Itoa(exporterPort),
+		"--auth-log.path=/var/log/secure",
+	}
+	exporterCmd = append(exporterCmd, exporterArgs...)
+	exporterCmd = append(exporterCmd, ">/tmp/ssh_session_exporter.log", "2>&1", "<", "/dev/null", "&")
+	if _, err := h.guestRootOutput(strings.Join(exporterCmd, " ")); err != nil {
 		return fmt.Errorf("start exporter: %w", err)
 	}
 	if err := h.waitForHTTPReady(2 * time.Minute); err != nil {
@@ -212,6 +220,57 @@ func (h *harness) Start(t *testing.T) error {
 	}
 
 	return nil
+}
+
+func (h *harness) StartInteractiveProbeSession(t *testing.T) (<-chan error, error) {
+	t.Helper()
+
+	if h.sshConfigFile == "" {
+		return nil, errors.New("ssh config file is empty")
+	}
+
+	cmd := exec.Command(
+		"ssh",
+		"-F", h.sshConfigFile,
+		"-o", "ControlMaster=no",
+		"-o", "ControlPath=none",
+		"-o", "ControlPersist=no",
+		"-o", "IdentitiesOnly=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile="+filepath.Join(h.workDir, "known_hosts"),
+		"-o", "User=probe",
+		"-i", h.probePrivateKey,
+		"-tt",
+		h.sshAlias(),
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create probe ssh stdin pipe: %w", err)
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start interactive probe ssh session: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		defer stdin.Close()
+		_, _ = io.WriteString(stdin, "printf '__probe_ready__\\n'\n")
+		_, _ = io.WriteString(stdin, "sleep 15\n")
+		_, _ = io.WriteString(stdin, "exit\n")
+	}()
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			done <- fmt.Errorf("interactive probe ssh session failed: %w\n%s", err, out.String())
+			return
+		}
+		done <- nil
+	}()
+
+	return done, nil
 }
 
 func (h *harness) StartProbeSession(t *testing.T) (<-chan error, error) {

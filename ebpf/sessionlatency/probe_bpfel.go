@@ -62,7 +62,11 @@ type probeSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type probeProgramSpecs struct {
 	TraceEnterAccept4     *ebpf.ProgramSpec `ebpf:"trace_enter_accept4"`
+	TraceEnterWrite       *ebpf.ProgramSpec `ebpf:"trace_enter_write"`
+	TraceEnterWritev      *ebpf.ProgramSpec `ebpf:"trace_enter_writev"`
 	TraceExitAccept4      *ebpf.ProgramSpec `ebpf:"trace_exit_accept4"`
+	TraceExitWrite        *ebpf.ProgramSpec `ebpf:"trace_exit_write"`
+	TraceExitWritev       *ebpf.ProgramSpec `ebpf:"trace_exit_writev"`
 	TraceSchedProcessExec *ebpf.ProgramSpec `ebpf:"trace_sched_process_exec"`
 	TraceSchedProcessExit *ebpf.ProgramSpec `ebpf:"trace_sched_process_exit"`
 	TraceSchedProcessFork *ebpf.ProgramSpec `ebpf:"trace_sched_process_fork"`
@@ -75,6 +79,7 @@ type probeProgramSpecs struct {
 type probeMapSpecs struct {
 	Events          *ebpf.MapSpec `ebpf:"events"`
 	InflightAccepts *ebpf.MapSpec `ebpf:"inflight_accepts"`
+	InflightWrites  *ebpf.MapSpec `ebpf:"inflight_writes"`
 }
 
 // probeVariableSpecs contains global variables before they are loaded into the kernel.
@@ -105,12 +110,14 @@ func (o *probeObjects) Close() error {
 type probeMaps struct {
 	Events          *ebpf.Map `ebpf:"events"`
 	InflightAccepts *ebpf.Map `ebpf:"inflight_accepts"`
+	InflightWrites  *ebpf.Map `ebpf:"inflight_writes"`
 }
 
 func (m *probeMaps) Close() error {
 	return _ProbeClose(
 		m.Events,
 		m.InflightAccepts,
+		m.InflightWrites,
 	)
 }
 
@@ -125,7 +132,11 @@ type probeVariables struct {
 // It can be passed to loadProbeObjects or ebpf.CollectionSpec.LoadAndAssign.
 type probePrograms struct {
 	TraceEnterAccept4     *ebpf.Program `ebpf:"trace_enter_accept4"`
+	TraceEnterWrite       *ebpf.Program `ebpf:"trace_enter_write"`
+	TraceEnterWritev      *ebpf.Program `ebpf:"trace_enter_writev"`
 	TraceExitAccept4      *ebpf.Program `ebpf:"trace_exit_accept4"`
+	TraceExitWrite        *ebpf.Program `ebpf:"trace_exit_write"`
+	TraceExitWritev       *ebpf.Program `ebpf:"trace_exit_writev"`
 	TraceSchedProcessExec *ebpf.Program `ebpf:"trace_sched_process_exec"`
 	TraceSchedProcessExit *ebpf.Program `ebpf:"trace_sched_process_exit"`
 	TraceSchedProcessFork *ebpf.Program `ebpf:"trace_sched_process_fork"`
@@ -135,7 +146,11 @@ type probePrograms struct {
 func (p *probePrograms) Close() error {
 	return _ProbeClose(
 		p.TraceEnterAccept4,
+		p.TraceEnterWrite,
+		p.TraceEnterWritev,
 		p.TraceExitAccept4,
+		p.TraceExitWrite,
+		p.TraceExitWritev,
 		p.TraceSchedProcessExec,
 		p.TraceSchedProcessExit,
 		p.TraceSchedProcessFork,

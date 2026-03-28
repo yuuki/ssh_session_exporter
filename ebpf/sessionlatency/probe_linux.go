@@ -111,7 +111,6 @@ func Start(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger, 
 		{"syscalls", "sys_exit_accept4", probe.objects.TraceExitAccept4},
 		{"sched", "sched_process_fork", probe.objects.TraceSchedProcessFork},
 		{"sched", "sched_process_exec", probe.objects.TraceSchedProcessExec},
-		{"tty", "tty_write", probe.objects.TraceTtyWrite},
 		{"sched", "sched_process_exit", probe.objects.TraceSchedProcessExit},
 	}
 	for _, tp := range attachPoints {
@@ -121,6 +120,10 @@ func Start(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger, 
 			return nil, fmt.Errorf("attach %s/%s: %w", tp.group, tp.name, err)
 		}
 		probe.links = append(probe.links, l)
+	}
+	if err := probe.attachWriteEvent(); err != nil {
+		probe.Close()
+		return nil, err
 	}
 
 	probe.processor.setUp(true)
@@ -133,6 +136,39 @@ func Start(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger, 
 	}()
 
 	return probe, nil
+}
+
+func (p *Probe) attachWriteEvent() error {
+	if l, err := link.Tracepoint("tty", "tty_write", p.objects.TraceTtyWrite, nil); err == nil {
+		p.links = append(p.links, l)
+		return nil
+	}
+
+	enter, err := link.Tracepoint("syscalls", "sys_enter_write", p.objects.TraceEnterWrite, nil)
+	if err != nil {
+		return fmt.Errorf("attach tty/tty_write fallback sys_enter_write: %w", err)
+	}
+	exit, err := link.Tracepoint("syscalls", "sys_exit_write", p.objects.TraceExitWrite, nil)
+	if err != nil {
+		_ = enter.Close()
+		return fmt.Errorf("attach tty/tty_write fallback sys_exit_write: %w", err)
+	}
+	enterv, err := link.Tracepoint("syscalls", "sys_enter_writev", p.objects.TraceEnterWritev, nil)
+	if err != nil {
+		_ = enter.Close()
+		_ = exit.Close()
+		return fmt.Errorf("attach tty/tty_write fallback sys_enter_writev: %w", err)
+	}
+	exitv, err := link.Tracepoint("syscalls", "sys_exit_writev", p.objects.TraceExitWritev, nil)
+	if err != nil {
+		_ = enter.Close()
+		_ = exit.Close()
+		_ = enterv.Close()
+		return fmt.Errorf("attach tty/tty_write fallback sys_exit_writev: %w", err)
+	}
+	p.links = append(p.links, enter, exit, enterv, exitv)
+	p.logger.Info("tty/tty_write tracepoint unavailable, falling back to syscalls/sys_exit_write")
+	return nil
 }
 
 func (p *Probe) HandleAuthEvent(event authlog.AuthEvent) {

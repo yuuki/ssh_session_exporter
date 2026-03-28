@@ -89,6 +89,36 @@ func TestProcessorRecordsHistogramsWithTupleFallback(t *testing.T) {
 	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "identity_unmatched"}, 0)
 }
 
+func TestProcessorCreatesRootFromAcceptedAuthWhenForkCorrelationIsMissing(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Unix(1_700_000_150, 0)
+
+	p, err := newProcessor(reg, slog.Default(), Options{Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("newProcessor: %v", err)
+	}
+	p.now = func() time.Time { return now }
+	p.resolveUser = func(uid uint32) (string, bool) {
+		if uid == 1001 {
+			return "alice", true
+		}
+		return "", false
+	}
+
+	p.handleTraceEvent(traceEvent{Kind: traceEventAccept, PID: 10, RemoteIP: "198.51.100.9", Timestamp: now})
+	p.HandleAuthEvent(authlog.AuthEvent{
+		Type:      authlog.EventAuthSuccess,
+		PID:       5001,
+		User:      "alice",
+		RemoteIP:  "198.51.100.9",
+		Timestamp: now.Add(100 * time.Millisecond),
+	})
+	p.handleTraceEvent(traceEvent{Kind: traceEventExec, PID: 5001, UID: 1001, Comm: "bash", Timestamp: now.Add(200 * time.Millisecond)})
+	p.handleTraceEvent(traceEvent{Kind: traceEventTTYWrite, PID: 5001, UID: 1001, Bytes: 32, Timestamp: now.Add(400 * time.Millisecond)})
+
+	assertHistogramCount(t, reg, "ssh_accept_to_shell_usable_seconds", map[string]string{"user": "alice", "remote_ip": "198.51.100.9"}, 1)
+}
+
 func TestProcessorTracksTimeoutAndExitFailurePaths(t *testing.T) {
 	reg := prometheus.NewPedanticRegistry()
 	now := time.Unix(1_700_000_200, 0)

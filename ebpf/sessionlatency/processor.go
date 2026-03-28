@@ -16,13 +16,13 @@ import (
 const defaultTimeout = 30 * time.Second
 
 const (
-	failureAcceptOrphaned    = "accept_orphaned"
-	failureForkUnmatched     = "fork_unmatched"
-	failureShellExecMissing  = "shell_exec_missing"
-	failureTTYWriteTimeout   = "tty_write_timeout"
-	failureIdentityUnmatched = "identity_unmatched"
+	failureAcceptOrphaned     = "accept_orphaned"
+	failureForkUnmatched      = "fork_unmatched"
+	failureShellExecMissing   = "shell_exec_missing"
+	failureTTYWriteTimeout    = "tty_write_timeout"
+	failureIdentityUnmatched  = "identity_unmatched"
 	failureExitedBeforeUsable = "exited_before_usable"
-	failureEventsDropped     = "events_dropped"
+	failureEventsDropped      = "events_dropped"
 )
 
 type Options struct {
@@ -190,6 +190,21 @@ func (p *processor) HandleAuthEvent(event authlog.AuthEvent) {
 
 	if rootPID, ok := p.procToRoot[event.PID]; ok {
 		p.attachAcceptedIdentity(rootPID, auth)
+		return
+	}
+	if accept, ok := p.consumeAcceptByRemoteIP(event.RemoteIP); ok {
+		rootPID := event.PID
+		session := &sessionState{
+			rootPID:    rootPID,
+			remoteIP:   accept.remoteIP,
+			user:       event.User,
+			acceptTS:   accept.ts,
+			forkTS:     event.Timestamp,
+			deadline:   accept.ts.Add(p.timeout),
+			activePIDs: map[int32]struct{}{rootPID: {}},
+		}
+		p.sessions[rootPID] = session
+		p.procToRoot[rootPID] = rootPID
 		return
 	}
 
@@ -441,6 +456,23 @@ func (p *processor) attachAcceptedIdentityFromTuple(rootPID int32) {
 		p.acceptedByTuple[key] = queue[1:]
 	}
 	p.attachAcceptedIdentity(rootPID, auth)
+}
+
+func (p *processor) consumeAcceptByRemoteIP(remoteIP string) (acceptEntry, bool) {
+	for listenerPID, queue := range p.pendingAccepts {
+		for idx, accept := range queue {
+			if accept.remoteIP != remoteIP {
+				continue
+			}
+			if len(queue) == 1 {
+				delete(p.pendingAccepts, listenerPID)
+			} else {
+				p.pendingAccepts[listenerPID] = append(queue[:idx], queue[idx+1:]...)
+			}
+			return accept, true
+		}
+	}
+	return acceptEntry{}, false
 }
 
 func (p *processor) deleteSessionLocked(rootPID int32) {
