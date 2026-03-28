@@ -585,11 +585,18 @@ func waitFor(timeout, interval time.Duration, fn func() error) error {
 }
 
 func ensurePortAvailable(port int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return err
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	// Retry briefly to tolerate TCP TIME_WAIT from a just-deleted Lima instance.
+	var lastErr error
+	for range 10 {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln.Close()
+		}
+		lastErr = err
+		time.Sleep(500 * time.Millisecond)
 	}
-	return ln.Close()
+	return lastErr
 }
 
 func getenvDefault(key, fallback string) string {
