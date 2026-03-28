@@ -1,3 +1,6 @@
 /ssh_session_exporter
 /ssh_session_exporter.*
 /.e2e-artifacts/
+
+# Allow eBPF compiled objects (needed for go:embed)
+!ebpf/**/*.o
