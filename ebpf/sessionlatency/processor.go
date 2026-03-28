@@ -194,35 +194,11 @@ func (p *processor) HandleAuthEvent(event authlog.AuthEvent) {
 		return
 	}
 	if accept, ok := p.consumeAcceptByRemoteIP(event.RemoteIP); ok {
-		rootPID := event.PID
-		session := &sessionState{
-			rootPID:    rootPID,
-			remoteIP:   accept.remoteIP,
-			user:       event.User,
-			acceptTS:   accept.ts,
-			forkTS:     event.Timestamp,
-			deadline:   accept.ts.Add(p.timeout),
-			activePIDs: map[int32]struct{}{rootPID: {}},
-		}
-		p.sessions[rootPID] = session
-		p.procToRoot[rootPID] = rootPID
-		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		p.registerSessionFromAccept(event.PID, accept.remoteIP, event.User, accept.ts, event.Timestamp)
 		return
 	}
 	if accept, ok := p.consumeOldestAccept(); ok {
-		rootPID := event.PID
-		session := &sessionState{
-			rootPID:    rootPID,
-			remoteIP:   event.RemoteIP,
-			user:       event.User,
-			acceptTS:   accept.ts,
-			forkTS:     event.Timestamp,
-			deadline:   accept.ts.Add(p.timeout),
-			activePIDs: map[int32]struct{}{rootPID: {}},
-		}
-		p.sessions[rootPID] = session
-		p.procToRoot[rootPID] = rootPID
-		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		p.registerSessionFromAccept(event.PID, event.RemoteIP, event.User, accept.ts, event.Timestamp)
 		return
 	}
 	if rootPID, ok := p.findOldestBufferedSessionLocked(); ok {
@@ -326,6 +302,7 @@ func (p *processor) handleForkLocked(event traceEvent) {
 	if len(queue) == 0 {
 		return
 	}
+	// Rocky can leave fork tracepoint comm fields empty, so v1 trusts parent PID plus the accept FIFO.
 	accept := queue[0]
 	if len(queue) == 1 {
 		delete(p.pendingAccepts, event.ParentPID)
@@ -378,6 +355,7 @@ func (p *processor) handleTTYWriteLocked(event traceEvent) {
 		session.firstTTYWriteTS = event.Timestamp
 	}
 	if !session.sawShellExec {
+		// tty write can arrive before shell exec or auth success, so keep the session buffered here.
 		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
 		return
 	}
@@ -414,12 +392,14 @@ func (p *processor) handleExitLocked(event traceEvent) {
 	if !session.firstTTYWriteTS.IsZero() && !session.sawTTYWrite {
 		if session.user != "" {
 			if !session.sawShellExec {
+				// If exec was missed but first PTY output was observed, treat the session as usable and close it.
 				session.sawShellExec = true
 				session.shellExecTS = session.firstTTYWriteTS
 			}
 			p.finalizeSessionLocked(rootPID)
 			return
 		}
+		// Auth success can arrive after tty write, so keep only the root PID alive for later correlation.
 		session.activePIDs[rootPID] = struct{}{}
 		p.procToRoot[rootPID] = rootPID
 		return
@@ -451,9 +431,25 @@ func (p *processor) attachAcceptedIdentity(rootPID int32, auth acceptedAuth) boo
 	}
 	session.user = auth.user
 	if auth.remoteIP != "" {
+		// Overwrite labels with auth.log values instead of trusting the eBPF-side guess.
 		session.remoteIP = auth.remoteIP
 	}
 	return true
+}
+
+func (p *processor) registerSessionFromAccept(rootPID int32, remoteIP, user string, acceptTS, forkTS time.Time) {
+	session := &sessionState{
+		rootPID:    rootPID,
+		remoteIP:   remoteIP,
+		user:       user,
+		acceptTS:   acceptTS,
+		forkTS:     forkTS,
+		deadline:   acceptTS.Add(p.timeout),
+		activePIDs: map[int32]struct{}{rootPID: {}},
+	}
+	p.sessions[rootPID] = session
+	p.procToRoot[rootPID] = rootPID
+	p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
 }
 
 func (p *processor) maybeFinalizeBufferedTTYWriteLocked(rootPID int32) {
@@ -492,6 +488,7 @@ func (p *processor) attachAcceptedIdentityFromRemoteIP(rootPID int32) {
 	if session == nil || session.remoteIP == "" {
 		return
 	}
+	// As a last resort for privsep-style PID splits, match auth success by remote_ip only.
 	for key, queue := range p.acceptedByTuple {
 		if key.remoteIP != session.remoteIP || len(queue) == 0 {
 			continue
