@@ -284,7 +284,7 @@ func (h *harness) WaitForProbeSession(t *testing.T) error {
 	})
 }
 
-func (h *harness) WaitForMetric(t *testing.T, needle string) (string, error) {
+func (h *harness) WaitForMetrics(t *testing.T, needles ...string) (string, error) {
 	t.Helper()
 	var body string
 	err := waitFor(45*time.Second, 1500*time.Millisecond, func() error {
@@ -293,11 +293,10 @@ func (h *harness) WaitForMetric(t *testing.T, needle string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(body, needle) {
-			return fmt.Errorf("metric %q not observed yet", needle)
-		}
-		if !strings.Contains(body, `ssh_login_setup_seconds_count{user="probe"}`) {
-			return errors.New("login setup metric not observed yet")
+		for _, needle := range needles {
+			if !strings.Contains(body, needle) {
+				return fmt.Errorf("metric %q not observed yet", needle)
+			}
 		}
 		return nil
 	})
@@ -406,6 +405,10 @@ func (h *harness) waitForGuestShell(timeout time.Duration) error {
 	})
 }
 
+// doubleScrape scrapes twice because the first Collect() detects new/ended
+// sessions via utmp diff, updating counters and histograms as a side-effect.
+// The second scrape returns a response that includes both current gauge state
+// and the just-updated counter/histogram values.
 func (h *harness) doubleScrape() (string, error) {
 	if _, err := h.scrapeMetrics(); err != nil {
 		return "", err

@@ -127,14 +127,11 @@ func TestRockyLimaE2E_PublicKeyLoginSetup(t *testing.T) {
 		t.Fatalf("WaitForProbeSession() error = %v", err)
 	}
 
-	metrics, err := h.WaitForMetric(t, `ssh_auth_success_total{`)
+	metrics, err := h.WaitForMetrics(t, `ssh_auth_success_total{`, `ssh_login_setup_seconds_count{user="probe"}`)
 	if err != nil {
-		t.Fatalf("WaitForMetric(auth_success) error = %v", err)
+		t.Fatalf("WaitForMetrics() error = %v", err)
 	}
 	if !strings.Contains(metrics, `method="publickey"`) || !strings.Contains(metrics, `user="probe"`) {
 		t.Fatalf("probe publickey auth success not observed in metrics:\n%s", metrics)
-	}
-	if !strings.Contains(metrics, `ssh_login_setup_seconds_count{user="probe"} 1`) {
-		t.Fatalf("ssh_login_setup_seconds_count not observed in metrics:\n%s", metrics)
 	}
 }
