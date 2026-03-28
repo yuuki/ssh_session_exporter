@@ -107,6 +107,8 @@ func Start(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger, 
 		name  string
 		prog  *ebpf.Program
 	}{
+		{"syscalls", "sys_enter_accept", probe.objects.TraceEnterAccept},
+		{"syscalls", "sys_exit_accept", probe.objects.TraceExitAccept},
 		{"syscalls", "sys_enter_accept4", probe.objects.TraceEnterAccept4},
 		{"syscalls", "sys_exit_accept4", probe.objects.TraceExitAccept4},
 		{"sched", "sched_process_fork", probe.objects.TraceSchedProcessFork},

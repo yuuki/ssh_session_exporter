@@ -174,8 +174,50 @@ int trace_enter_accept4(struct trace_event_raw_sys_enter *ctx) {
   return 0;
 }
 
+SEC("tracepoint/syscalls/sys_enter_accept")
+int trace_enter_accept(struct trace_event_raw_sys_enter *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  struct accept_args args = {};
+
+  if (!current_is_sshd()) {
+    return 0;
+  }
+
+  args.upeer_sockaddr = (__u64)ctx->args[1];
+  args.upeer_addrlen = (__u64)ctx->args[2];
+  bpf_map_update_elem(&inflight_accepts, &pid_tgid, &args, BPF_ANY);
+  return 0;
+}
+
 SEC("tracepoint/syscalls/sys_exit_accept4")
 int trace_exit_accept4(struct trace_event_raw_sys_exit *ctx) {
+  __u64 pid_tgid = bpf_get_current_pid_tgid();
+  struct accept_args *args;
+  struct event ev = {};
+
+  if (ctx->ret < 0) {
+    bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
+    return 0;
+  }
+
+  args = bpf_map_lookup_elem(&inflight_accepts, &pid_tgid);
+  if (!args) {
+    return 0;
+  }
+
+  ev.kind = EVENT_ACCEPT;
+  ev.pid = pid_tgid >> 32;
+  ev.ts_ns = bpf_ktime_get_ns();
+
+  if (fill_addr(&ev, args)) {
+    submit_event(&ev);
+  }
+  bpf_map_delete_elem(&inflight_accepts, &pid_tgid);
+  return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_accept")
+int trace_exit_accept(struct trace_event_raw_sys_exit *ctx) {
   __u64 pid_tgid = bpf_get_current_pid_tgid();
   struct accept_args *args;
   struct event ev = {};

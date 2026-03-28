@@ -61,9 +61,11 @@ type probeSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type probeProgramSpecs struct {
+	TraceEnterAccept      *ebpf.ProgramSpec `ebpf:"trace_enter_accept"`
 	TraceEnterAccept4     *ebpf.ProgramSpec `ebpf:"trace_enter_accept4"`
 	TraceEnterWrite       *ebpf.ProgramSpec `ebpf:"trace_enter_write"`
 	TraceEnterWritev      *ebpf.ProgramSpec `ebpf:"trace_enter_writev"`
+	TraceExitAccept       *ebpf.ProgramSpec `ebpf:"trace_exit_accept"`
 	TraceExitAccept4      *ebpf.ProgramSpec `ebpf:"trace_exit_accept4"`
 	TraceExitWrite        *ebpf.ProgramSpec `ebpf:"trace_exit_write"`
 	TraceExitWritev       *ebpf.ProgramSpec `ebpf:"trace_exit_writev"`
@@ -131,9 +133,11 @@ type probeVariables struct {
 //
 // It can be passed to loadProbeObjects or ebpf.CollectionSpec.LoadAndAssign.
 type probePrograms struct {
+	TraceEnterAccept      *ebpf.Program `ebpf:"trace_enter_accept"`
 	TraceEnterAccept4     *ebpf.Program `ebpf:"trace_enter_accept4"`
 	TraceEnterWrite       *ebpf.Program `ebpf:"trace_enter_write"`
 	TraceEnterWritev      *ebpf.Program `ebpf:"trace_enter_writev"`
+	TraceExitAccept       *ebpf.Program `ebpf:"trace_exit_accept"`
 	TraceExitAccept4      *ebpf.Program `ebpf:"trace_exit_accept4"`
 	TraceExitWrite        *ebpf.Program `ebpf:"trace_exit_write"`
 	TraceExitWritev       *ebpf.Program `ebpf:"trace_exit_writev"`
@@ -145,9 +149,11 @@ type probePrograms struct {
 
 func (p *probePrograms) Close() error {
 	return _ProbeClose(
+		p.TraceEnterAccept,
 		p.TraceEnterAccept4,
 		p.TraceEnterWrite,
 		p.TraceEnterWritev,
+		p.TraceExitAccept,
 		p.TraceExitAccept4,
 		p.TraceExitWrite,
 		p.TraceExitWritev,
