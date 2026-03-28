@@ -190,6 +190,7 @@ func (p *processor) HandleAuthEvent(event authlog.AuthEvent) {
 
 	if rootPID, ok := p.procToRoot[event.PID]; ok {
 		p.attachAcceptedIdentity(rootPID, auth)
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
 		return
 	}
 	if accept, ok := p.consumeAcceptByRemoteIP(event.RemoteIP); ok {
@@ -205,6 +206,28 @@ func (p *processor) HandleAuthEvent(event authlog.AuthEvent) {
 		}
 		p.sessions[rootPID] = session
 		p.procToRoot[rootPID] = rootPID
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		return
+	}
+	if accept, ok := p.consumeOldestAccept(); ok {
+		rootPID := event.PID
+		session := &sessionState{
+			rootPID:    rootPID,
+			remoteIP:   event.RemoteIP,
+			user:       event.User,
+			acceptTS:   accept.ts,
+			forkTS:     event.Timestamp,
+			deadline:   accept.ts.Add(p.timeout),
+			activePIDs: map[int32]struct{}{rootPID: {}},
+		}
+		p.sessions[rootPID] = session
+		p.procToRoot[rootPID] = rootPID
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		return
+	}
+	if rootPID, ok := p.findOldestBufferedSessionLocked(); ok {
+		p.attachAcceptedIdentity(rootPID, auth)
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
 		return
 	}
 
@@ -299,13 +322,8 @@ func (p *processor) handleForkLocked(event traceEvent) {
 		return
 	}
 
-	if event.ParentComm != "sshd" || event.Comm != "sshd" {
-		return
-	}
-
 	queue := p.pendingAccepts[event.ParentPID]
 	if len(queue) == 0 {
-		p.failures.WithLabelValues(failureForkUnmatched).Inc()
 		return
 	}
 	accept := queue[0]
@@ -334,17 +352,15 @@ func (p *processor) handleExecLocked(event traceEvent) {
 		return
 	}
 	session := p.sessions[rootPID]
-	if session == nil || !looksLikeShell(event.Comm) {
+	if session == nil {
+		return
+	}
+	if !looksLikeShell(event.Comm) {
 		return
 	}
 	if !session.sawShellExec {
 		session.sawShellExec = true
 		session.shellExecTS = event.Timestamp
-	}
-	if session.user == "" {
-		if userName, ok := p.resolveUser(event.UID); ok {
-			session.user = userName
-		}
 	}
 	p.attachAcceptedIdentityFromPID(rootPID, event.PID)
 }
@@ -358,34 +374,25 @@ func (p *processor) handleTTYWriteLocked(event traceEvent) {
 	if session == nil || session.sawTTYWrite || event.Bytes == 0 {
 		return
 	}
-	if session.user == "" {
-		if userName, ok := p.resolveUser(event.UID); ok {
-			session.user = userName
-		}
+	if session.firstTTYWriteTS.IsZero() {
+		session.firstTTYWriteTS = event.Timestamp
 	}
 	if !session.sawShellExec {
-		p.failures.WithLabelValues(failureShellExecMissing).Inc()
-		p.deleteSessionLocked(rootPID)
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
 		return
 	}
 
+	if session.user == "" && session.remoteIP != "" {
+		p.attachAcceptedIdentityFromRemoteIP(rootPID)
+	}
 	if session.user != "" {
 		p.attachAcceptedIdentityFromTuple(rootPID)
 	}
 	if session.user == "" {
-		p.failures.WithLabelValues(failureIdentityUnmatched).Inc()
-		p.deleteSessionLocked(rootPID)
 		return
 	}
 
-	session.sawTTYWrite = true
-	session.firstTTYWriteTS = event.Timestamp
-	labels := []string{session.user, session.remoteIP}
-	p.acceptToShellUsable.WithLabelValues(labels...).Observe(event.Timestamp.Sub(session.acceptTS).Seconds())
-	p.acceptToChildFork.WithLabelValues(labels...).Observe(session.forkTS.Sub(session.acceptTS).Seconds())
-	p.childForkToShellExec.WithLabelValues(labels...).Observe(session.shellExecTS.Sub(session.forkTS).Seconds())
-	p.shellExecToFirstTTYOutput.WithLabelValues(labels...).Observe(event.Timestamp.Sub(session.shellExecTS).Seconds())
-	p.deleteSessionLocked(rootPID)
+	p.finalizeSessionLocked(rootPID)
 }
 
 func (p *processor) handleExitLocked(event traceEvent) {
@@ -402,6 +409,19 @@ func (p *processor) handleExitLocked(event traceEvent) {
 	delete(session.activePIDs, event.PID)
 	delete(p.procToRoot, event.PID)
 	if len(session.activePIDs) > 0 {
+		return
+	}
+	if !session.firstTTYWriteTS.IsZero() && !session.sawTTYWrite {
+		if session.user != "" {
+			if !session.sawShellExec {
+				session.sawShellExec = true
+				session.shellExecTS = session.firstTTYWriteTS
+			}
+			p.finalizeSessionLocked(rootPID)
+			return
+		}
+		session.activePIDs[rootPID] = struct{}{}
+		p.procToRoot[rootPID] = rootPID
 		return
 	}
 	if session.sawTTYWrite {
@@ -429,14 +449,23 @@ func (p *processor) attachAcceptedIdentity(rootPID int32, auth acceptedAuth) boo
 	if session == nil {
 		return false
 	}
-	if session.remoteIP != "" && auth.remoteIP != "" && session.remoteIP != auth.remoteIP {
-		return false
-	}
 	session.user = auth.user
-	if session.remoteIP == "" {
+	if auth.remoteIP != "" {
 		session.remoteIP = auth.remoteIP
 	}
 	return true
+}
+
+func (p *processor) maybeFinalizeBufferedTTYWriteLocked(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.sawTTYWrite || session.firstTTYWriteTS.IsZero() || session.user == "" {
+		return
+	}
+	if !session.sawShellExec {
+		session.sawShellExec = true
+		session.shellExecTS = session.firstTTYWriteTS
+	}
+	p.finalizeSessionLocked(rootPID)
 }
 
 func (p *processor) attachAcceptedIdentityFromTuple(rootPID int32) {
@@ -458,6 +487,26 @@ func (p *processor) attachAcceptedIdentityFromTuple(rootPID int32) {
 	p.attachAcceptedIdentity(rootPID, auth)
 }
 
+func (p *processor) attachAcceptedIdentityFromRemoteIP(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.remoteIP == "" {
+		return
+	}
+	for key, queue := range p.acceptedByTuple {
+		if key.remoteIP != session.remoteIP || len(queue) == 0 {
+			continue
+		}
+		auth := queue[0]
+		if len(queue) == 1 {
+			delete(p.acceptedByTuple, key)
+		} else {
+			p.acceptedByTuple[key] = queue[1:]
+		}
+		p.attachAcceptedIdentity(rootPID, auth)
+		return
+	}
+}
+
 func (p *processor) consumeAcceptByRemoteIP(remoteIP string) (acceptEntry, bool) {
 	for listenerPID, queue := range p.pendingAccepts {
 		for idx, accept := range queue {
@@ -475,6 +524,56 @@ func (p *processor) consumeAcceptByRemoteIP(remoteIP string) (acceptEntry, bool)
 	return acceptEntry{}, false
 }
 
+func (p *processor) consumeOldestAccept() (acceptEntry, bool) {
+	var (
+		selectedPID int32
+		selected    acceptEntry
+		found       bool
+	)
+	for listenerPID, queue := range p.pendingAccepts {
+		if len(queue) == 0 {
+			continue
+		}
+		if !found || queue[0].ts.Before(selected.ts) {
+			selectedPID = listenerPID
+			selected = queue[0]
+			found = true
+		}
+	}
+	if !found {
+		return acceptEntry{}, false
+	}
+	queue := p.pendingAccepts[selectedPID]
+	if len(queue) == 1 {
+		delete(p.pendingAccepts, selectedPID)
+	} else {
+		p.pendingAccepts[selectedPID] = queue[1:]
+	}
+	return selected, true
+}
+
+func (p *processor) findOldestBufferedSessionLocked() (int32, bool) {
+	var (
+		selectedRoot int32
+		selectedTS   time.Time
+		found        bool
+	)
+	for rootPID, session := range p.sessions {
+		if session == nil || session.sawTTYWrite || session.firstTTYWriteTS.IsZero() {
+			continue
+		}
+		if !found || session.firstTTYWriteTS.Before(selectedTS) {
+			selectedRoot = rootPID
+			selectedTS = session.firstTTYWriteTS
+			found = true
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	return selectedRoot, true
+}
+
 func (p *processor) deleteSessionLocked(rootPID int32) {
 	session := p.sessions[rootPID]
 	if session == nil {
@@ -486,14 +585,36 @@ func (p *processor) deleteSessionLocked(rootPID int32) {
 	delete(p.sessions, rootPID)
 }
 
+func (p *processor) finalizeSessionLocked(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.sawTTYWrite || session.user == "" || session.firstTTYWriteTS.IsZero() {
+		return
+	}
+	session.sawTTYWrite = true
+	labels := []string{session.user, session.remoteIP}
+	p.acceptToShellUsable.WithLabelValues(labels...).Observe(session.firstTTYWriteTS.Sub(session.acceptTS).Seconds())
+	p.acceptToChildFork.WithLabelValues(labels...).Observe(session.forkTS.Sub(session.acceptTS).Seconds())
+	p.childForkToShellExec.WithLabelValues(labels...).Observe(session.shellExecTS.Sub(session.forkTS).Seconds())
+	p.shellExecToFirstTTYOutput.WithLabelValues(labels...).Observe(session.firstTTYWriteTS.Sub(session.shellExecTS).Seconds())
+	p.deleteSessionLocked(rootPID)
+}
+
 func looksLikeShell(comm string) bool {
-	comm = strings.TrimPrefix(strings.TrimSpace(comm), "-")
+	comm = strings.TrimSpace(comm)
+	if idx := strings.LastIndex(comm, "/"); idx >= 0 {
+		comm = comm[idx+1:]
+	}
+	comm = strings.TrimPrefix(comm, "-")
 	switch comm {
 	case "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh":
 		return true
 	default:
 		return false
 	}
+}
+
+func (e traceEvent) String() string {
+	return fmt.Sprintf("kind=%d pid=%d ppid=%d comm=%q parent_comm=%q remote_ip=%q", e.Kind, e.PID, e.ParentPID, e.Comm, e.ParentComm, e.RemoteIP)
 }
 
 func lookupUsername(uid uint32) (string, bool) {
@@ -507,6 +628,19 @@ func lookupUsername(uid uint32) (string, bool) {
 	return u.Username, true
 }
 
-func (e traceEvent) String() string {
-	return fmt.Sprintf("kind=%d pid=%d ppid=%d comm=%q parent_comm=%q remote_ip=%q", e.Kind, e.PID, e.ParentPID, e.Comm, e.ParentComm, e.RemoteIP)
+func (k traceEventKind) String() string {
+	switch k {
+	case traceEventAccept:
+		return "accept"
+	case traceEventFork:
+		return "fork"
+	case traceEventExec:
+		return "exec"
+	case traceEventTTYWrite:
+		return "tty_write"
+	case traceEventExit:
+		return "exit"
+	default:
+		return "unknown"
+	}
 }

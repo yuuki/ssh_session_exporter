@@ -172,6 +172,10 @@ func TestRockyLimaE2E_EBPFShellUsableProbeStarts(t *testing.T) {
 		`ssh_exporter_ebpf_shell_usable_up 1`,
 		`ssh_auth_success_total{`,
 		`user="probe"`,
+		`ssh_accept_to_shell_usable_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_accept_to_child_fork_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_child_fork_to_shell_exec_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_shell_exec_to_first_tty_output_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
 	)
 	if err != nil {
 		t.Fatalf("WaitForMetrics() error = %v", err)

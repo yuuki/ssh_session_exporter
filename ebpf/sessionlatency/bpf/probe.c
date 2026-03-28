@@ -40,7 +40,9 @@ struct trace_event_raw_sys_enter {
   __u8 common_flags;
   __u8 common_preempt_count;
   __s32 common_pid;
-  long id;
+  __u8 common_preempt_lazy_count;
+  __u8 __pad[3];
+  __s32 id;
   unsigned long args[6];
 };
 
@@ -49,7 +51,9 @@ struct trace_event_raw_sys_exit {
   __u8 common_flags;
   __u8 common_preempt_count;
   __s32 common_pid;
-  long id;
+  __u8 common_preempt_lazy_count;
+  __u8 __pad[3];
+  __s32 id;
   long ret;
 };
 
@@ -58,10 +62,24 @@ struct trace_event_raw_sched_process_fork {
   __u8 common_flags;
   __u8 common_preempt_count;
   __s32 common_pid;
+  __u8 common_preempt_lazy_count;
+  __u8 __pad[3];
   char parent_comm[TASK_COMM_LEN];
   __s32 parent_pid;
   char child_comm[TASK_COMM_LEN];
   __s32 child_pid;
+};
+
+struct trace_event_raw_sched_process_exec {
+  __u16 common_type;
+  __u8 common_flags;
+  __u8 common_preempt_count;
+  __s32 common_pid;
+  __u8 common_preempt_lazy_count;
+  __u8 __pad[3];
+  __u32 filename_loc;
+  __s32 pid;
+  __s32 old_pid;
 };
 
 struct trace_event_raw_tty_write {
@@ -69,6 +87,8 @@ struct trace_event_raw_tty_write {
   __u8 common_flags;
   __u8 common_preempt_count;
   __s32 common_pid;
+  __u8 common_preempt_lazy_count;
+  __u8 __pad[3];
   __u64 tty;
   const char *buf;
   __u32 nr;
@@ -157,6 +177,15 @@ static __always_inline void submit_event(const struct event *src) {
   }
   __builtin_memcpy(dst, src, sizeof(*dst));
   bpf_ringbuf_submit(dst, 0);
+}
+
+static __always_inline void fill_comm_from_exec_filename(char dst[TASK_COMM_LEN], const struct trace_event_raw_sched_process_exec *ctx) {
+  __u16 offset = ctx->filename_loc & 0xffff;
+
+  if (offset == 0) {
+    return;
+  }
+  bpf_probe_read_kernel_str(dst, TASK_COMM_LEN, ((const char *)ctx) + offset);
 }
 
 SEC("tracepoint/syscalls/sys_enter_accept4")
@@ -258,15 +287,17 @@ int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx) {
 }
 
 SEC("tracepoint/sched/sched_process_exec")
-int trace_sched_process_exec(void *ctx) {
-  __u64 pid_tgid = bpf_get_current_pid_tgid();
+int trace_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
   struct event ev = {};
 
   ev.kind = EVENT_EXEC;
-  ev.pid = pid_tgid >> 32;
+  ev.pid = ctx->pid;
   ev.uid = (__u32)bpf_get_current_uid_gid();
   ev.ts_ns = bpf_ktime_get_ns();
-  bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+  fill_comm_from_exec_filename(ev.comm, ctx);
+  if (ev.comm[0] == '\0') {
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+  }
   submit_event(&ev);
   return 0;
 }
