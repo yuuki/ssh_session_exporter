@@ -5,7 +5,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_session_exporter)](https://github.com/yuuki/ssh_session_exporter/releases)
 [![Go](https://img.shields.io/badge/Go-%3E%3D1.26-blue?logo=go)](https://go.dev)
 
-Prometheus exporter for SSH session and authentication monitoring on Linux servers. Exposes session lifecycle metrics (active sessions, durations, connection events) from `/var/run/utmp` and authentication metrics (failures, invalid users, pre-auth disconnects) from `/var/log/auth.log`.
+Prometheus exporter for SSH session and authentication monitoring on Linux servers. Exposes session lifecycle metrics from `/var/run/utmp`, authentication metrics from `/var/log/auth.log` or `/var/log/secure`, and optional interactive shell latency metrics from eBPF tracepoints.
 
 ## Installation
 
@@ -128,6 +128,8 @@ The eBPF latency histograms also include `remote_ip`, which can create a large n
 - `ssh_accept_to_shell_usable_seconds` uses the first PTY write as the "shell usable" proxy. This is close to user-perceived readiness, but it is not a literal prompt-render timestamp.
 - If the eBPF probe fails to attach, the exporter continues to expose the existing auth-log and utmp metrics, and `ssh_exporter_ebpf_shell_usable_up` remains `0`.
 
+For a deeper architecture walkthrough of the eBPF path, see [docs/architecture/ebpf-shell-usable.md](/Users/y-tsubouchi/src/github.com/yuuki/ssh_sesshon_exporter/docs/architecture/ebpf-shell-usable.md).
+
 ### Limitations of utmp-based event detection
 
 Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_total`) and session duration (`ssh_session_duration_seconds`) are derived by diffing utmp snapshots between scrapes. This means:
@@ -138,26 +140,32 @@ Connection/disconnection counters (`ssh_connections_total`, `ssh_disconnections_
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ssh_session_exporter                         │
-│                                                                     │
-│  /var/run/utmp ──→ utmp.Reader ──→ sessiontracker.Tracker ──┐      │
-│                    (binary parse)    (snapshot diff)         │      │
-│                                                              ▼      │
-│                                                   collector.SSHCollector ──→ /metrics
-│                                                              ▲      │
-│  /var/log/auth.log ──→ authlog.FileWatcher ──→ chan AuthEvent┘      │
-│  /var/log/secure       (tail + parse)                               │
-│  (optional)                                                         │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           ssh_session_exporter                              │
+│                                                                              │
+│  /var/run/utmp ──→ utmp.Reader ──→ sessiontracker.Tracker ──┐              │
+│                    (binary parse)    (snapshot diff)         │              │
+│                                                              ▼              │
+│                                                   collector.SSHCollector ───┼──→ /metrics
+│                                                              ▲              │
+│  /var/log/auth.log ──→ authlog.FileWatcher ──→ fanOutAuthEvents ────────────┤
+│  /var/log/secure       (tail + parse, optional)            │                │
+│                                                            └──→ sessionlatency.Probe
+│                                                                 (optional eBPF/auth
+│                                                                  correlation)
+│                                                                              │
+│  kernel tracepoints ──→ eBPF ring buffer ────────────────────────────────────┘
+│  (accept/fork/exec/tty_write/exit)
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Sources
 
-- **utmp** (`/var/run/utmp`): Active session tracking, connection/disconnection detection, session duration calculation
-- **auth log** (`/var/log/auth.log` or `/var/log/secure`): Authentication failure events with method details
+- **utmp** (`/var/run/utmp`): Active session tracking, connection/disconnection detection, short session detection, and session duration calculation
+- **auth log** (`/var/log/auth.log` or `/var/log/secure`): Authentication outcomes and preauth events. The watcher is optional, and when the default path is used the exporter falls back from `/var/log/auth.log` to `/var/log/secure` automatically.
+- **eBPF tracepoints** (`accept`, `fork`, `exec`, `tty_write`, `exit`): Optional low-level timing events used to estimate `accept -> shell usable` latency for interactive PTY sessions
 
-The auth log is optional — if unavailable, the exporter continues with utmp-based metrics only.
+Both the auth log watcher and the eBPF probe are optional. If either one is unavailable, the exporter still serves the remaining metrics.
 
 ### Components
 
@@ -165,11 +173,13 @@ The auth log is optional — if unavailable, the exporter continues with utmp-ba
 |-----------|------|
 | **utmp.Reader** | Parses the Linux utmp binary format (384-byte records). Identifies SSH sessions as entries with a non-empty `Host` field. |
 | **sessiontracker.Tracker** | Stateful snapshot diff engine. Each `UpdateSessions()` call compares the current utmp snapshot against the previous state and returns a `SessionDelta` containing new and ended sessions (with duration). |
-| **authlog.FileWatcher** | Tails the auth log via polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines, extracts the sshd PID and syslog timestamp, and sends `AuthEvent` values to a channel. |
-| **collector.SSHCollector** | Implements `prometheus.Collector`. Processes utmp deltas on each scrape and consumes auth events in a background goroutine. Uses the PID correlator to compute metrics that span both data sources. |
-| **pidCorrelator** | Tracks per-PID state (failure count, auth-accept timestamp). Records the gap between authentication success and utmp entry appearance as `ssh_login_setup_seconds`, and the number of failures before success as `ssh_auth_attempts_before_success`. |
+| **authlog.FileWatcher** | Tails the auth log via polling (handles log rotation). Parses `Failed`, `Accepted`, `Invalid user`, and preauth disconnect lines, extracts the sshd PID and syslog timestamp, and emits `AuthEvent` values. |
+| **fanOutAuthEvents** | Forwards each `AuthEvent` to the Prometheus collector and, when enabled, to the eBPF session latency probe. This keeps auth parsing shared while the downstream consumers remain independent. |
+| **collector.SSHCollector** | Implements `prometheus.Collector`. On each scrape it reads utmp, diffs session state, emits gauges as `ConstMetric`, and updates counters/histograms derived from utmp deltas and auth events. |
+| **collector.sessionCorrelator** | Correlates auth-log events with utmp sessions. It tracks failed attempts before success and records `ssh_login_setup_seconds` even when auth and session PIDs differ because of OpenSSH privilege separation. |
+| **sessionlatency.Probe** | Attaches CO-RE eBPF programs to SSH-relevant tracepoints, consumes the ring buffer, and emits interactive shell latency histograms plus probe health/failure metrics. It also uses auth success events to attach `user` and `remote_ip` labels after kernel-side observation. |
 
-On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it against the previous one, and derives connection/disconnection events and session durations. Auth log processing runs in a separate goroutine and updates counters immediately as each `AuthEvent` arrives.
+On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it against the previous one, and derives connection/disconnection events and session durations. Auth log processing runs continuously in a background goroutine. When enabled, the eBPF probe runs in parallel, correlating kernel tracepoints with auth success events to approximate interactive shell readiness.
 
 ## For Developers
 
