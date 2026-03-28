@@ -1,0 +1,643 @@
+package sessionlatency
+
+import (
+	"fmt"
+	"log/slog"
+	"os/user"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/yuuki/ssh_session_exporter/authlog"
+)
+
+const defaultTimeout = 30 * time.Second
+
+const (
+	failureAcceptOrphaned     = "accept_orphaned"
+	failureForkUnmatched      = "fork_unmatched"
+	failureShellExecMissing   = "shell_exec_missing"
+	failureTTYWriteTimeout    = "tty_write_timeout"
+	failureIdentityUnmatched  = "identity_unmatched"
+	failureExitedBeforeUsable = "exited_before_usable"
+	failureEventsDropped      = "events_dropped"
+)
+
+type Options struct {
+	Timeout time.Duration
+}
+
+type traceEventKind uint8
+
+const (
+	traceEventAccept traceEventKind = iota + 1
+	traceEventFork
+	traceEventExec
+	traceEventTTYWrite
+	traceEventExit
+)
+
+type traceEvent struct {
+	Kind       traceEventKind
+	PID        int32
+	ParentPID  int32
+	UID        uint32
+	Comm       string
+	ParentComm string
+	RemoteIP   string
+	Bytes      uint32
+	Timestamp  time.Time
+}
+
+type acceptEntry struct {
+	remoteIP string
+	ts       time.Time
+}
+
+type tupleKey struct {
+	user     string
+	remoteIP string
+}
+
+type acceptedAuth struct {
+	user     string
+	remoteIP string
+	ts       time.Time
+	expires  time.Time
+}
+
+type sessionState struct {
+	rootPID         int32
+	remoteIP        string
+	user            string
+	acceptTS        time.Time
+	forkTS          time.Time
+	shellExecTS     time.Time
+	firstTTYWriteTS time.Time
+	deadline        time.Time
+	sawShellExec    bool
+	sawTTYWrite     bool
+	activePIDs      map[int32]struct{}
+}
+
+type processor struct {
+	mu sync.Mutex
+
+	logger      *slog.Logger
+	timeout     time.Duration
+	now         func() time.Time
+	resolveUser func(uid uint32) (string, bool)
+
+	pendingAccepts  map[int32][]acceptEntry
+	procToRoot      map[int32]int32
+	sessions        map[int32]*sessionState
+	acceptedByPID   map[int32]acceptedAuth
+	acceptedByTuple map[tupleKey][]acceptedAuth
+
+	up                        prometheus.Gauge
+	acceptToShellUsable       *prometheus.HistogramVec
+	acceptToChildFork         *prometheus.HistogramVec
+	childForkToShellExec      *prometheus.HistogramVec
+	shellExecToFirstTTYOutput *prometheus.HistogramVec
+	failures                  *prometheus.CounterVec
+}
+
+func newProcessor(reg prometheus.Registerer, logger *slog.Logger, opts Options) (*processor, error) {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	p := &processor{
+		logger:          logger,
+		timeout:         timeout,
+		now:             time.Now,
+		resolveUser:     lookupUsername,
+		pendingAccepts:  make(map[int32][]acceptEntry),
+		procToRoot:      make(map[int32]int32),
+		sessions:        make(map[int32]*sessionState),
+		acceptedByPID:   make(map[int32]acceptedAuth),
+		acceptedByTuple: make(map[tupleKey][]acceptedAuth),
+		up: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "ssh_exporter_ebpf_shell_usable_up",
+			Help: "Whether the eBPF shell usable latency probe is running.",
+		}),
+		acceptToShellUsable: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "ssh_accept_to_shell_usable_seconds",
+			Help:    "Time from SSH accept to first PTY output for interactive sessions.",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}, []string{"user", "remote_ip"}),
+		acceptToChildFork: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "ssh_accept_to_child_fork_seconds",
+			Help:    "Time from SSH accept to the initial session child fork.",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}, []string{"user", "remote_ip"}),
+		childForkToShellExec: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "ssh_child_fork_to_shell_exec_seconds",
+			Help:    "Time from the initial session child fork to shell exec.",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}, []string{"user", "remote_ip"}),
+		shellExecToFirstTTYOutput: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "ssh_shell_exec_to_first_tty_output_seconds",
+			Help:    "Time from shell exec to the first PTY output.",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}, []string{"user", "remote_ip"}),
+		failures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "ssh_shell_usable_failures_total",
+			Help: "Total number of shell usable latency probe failures.",
+		}, []string{"stage"}),
+	}
+
+	for _, collector := range []prometheus.Collector{
+		p.up,
+		p.acceptToShellUsable,
+		p.acceptToChildFork,
+		p.childForkToShellExec,
+		p.shellExecToFirstTTYOutput,
+		p.failures,
+	} {
+		if err := reg.Register(collector); err != nil {
+			return nil, err
+		}
+	}
+	p.up.Set(0)
+	return p, nil
+}
+
+func (p *processor) setUp(up bool) {
+	if up {
+		p.up.Set(1)
+		return
+	}
+	p.up.Set(0)
+}
+
+func (p *processor) HandleAuthEvent(event authlog.AuthEvent) {
+	if event.Type != authlog.EventAuthSuccess {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	auth := acceptedAuth{
+		user:     event.User,
+		remoteIP: event.RemoteIP,
+		ts:       event.Timestamp,
+		expires:  p.now().Add(p.timeout),
+	}
+
+	if rootPID, ok := p.procToRoot[event.PID]; ok {
+		p.attachAcceptedIdentity(rootPID, auth)
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		return
+	}
+	if accept, ok := p.consumeAcceptByRemoteIP(event.RemoteIP); ok {
+		p.registerSessionFromAccept(event.PID, accept.remoteIP, event.User, accept.ts, event.Timestamp)
+		return
+	}
+	if accept, ok := p.consumeOldestAccept(); ok {
+		p.registerSessionFromAccept(event.PID, event.RemoteIP, event.User, accept.ts, event.Timestamp)
+		return
+	}
+	if rootPID, ok := p.findOldestBufferedSessionLocked(); ok {
+		p.attachAcceptedIdentity(rootPID, auth)
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		return
+	}
+
+	p.acceptedByPID[event.PID] = auth
+	key := tupleKey{user: event.User, remoteIP: event.RemoteIP}
+	p.acceptedByTuple[key] = append(p.acceptedByTuple[key], auth)
+}
+
+func (p *processor) handleTraceEvent(event traceEvent) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	switch event.Kind {
+	case traceEventAccept:
+		p.pendingAccepts[event.PID] = append(p.pendingAccepts[event.PID], acceptEntry{
+			remoteIP: event.RemoteIP,
+			ts:       event.Timestamp,
+		})
+	case traceEventFork:
+		p.handleForkLocked(event)
+	case traceEventExec:
+		p.handleExecLocked(event)
+	case traceEventTTYWrite:
+		p.handleTTYWriteLocked(event)
+	case traceEventExit:
+		p.handleExitLocked(event)
+	}
+}
+
+func (p *processor) cleanupExpired() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := p.now()
+	for pid, queue := range p.pendingAccepts {
+		kept := queue[:0]
+		for _, accept := range queue {
+			if now.Sub(accept.ts) > p.timeout {
+				p.failures.WithLabelValues(failureAcceptOrphaned).Inc()
+				continue
+			}
+			kept = append(kept, accept)
+		}
+		if len(kept) == 0 {
+			delete(p.pendingAccepts, pid)
+		} else {
+			p.pendingAccepts[pid] = kept
+		}
+	}
+
+	for pid, auth := range p.acceptedByPID {
+		if now.After(auth.expires) {
+			delete(p.acceptedByPID, pid)
+		}
+	}
+
+	for key, queue := range p.acceptedByTuple {
+		kept := queue[:0]
+		for _, auth := range queue {
+			if now.After(auth.expires) {
+				continue
+			}
+			kept = append(kept, auth)
+		}
+		if len(kept) == 0 {
+			delete(p.acceptedByTuple, key)
+		} else {
+			p.acceptedByTuple[key] = kept
+		}
+	}
+
+	for rootPID, session := range p.sessions {
+		if now.Before(session.deadline) || session.sawTTYWrite {
+			continue
+		}
+		if session.sawShellExec {
+			p.failures.WithLabelValues(failureTTYWriteTimeout).Inc()
+		} else {
+			p.failures.WithLabelValues(failureShellExecMissing).Inc()
+		}
+		p.deleteSessionLocked(rootPID)
+	}
+}
+
+func (p *processor) handleForkLocked(event traceEvent) {
+	if rootPID, ok := p.procToRoot[event.ParentPID]; ok {
+		p.procToRoot[event.PID] = rootPID
+		if session, exists := p.sessions[rootPID]; exists {
+			session.activePIDs[event.PID] = struct{}{}
+		}
+		p.attachAcceptedIdentityFromPID(rootPID, event.PID)
+		return
+	}
+
+	queue := p.pendingAccepts[event.ParentPID]
+	if len(queue) == 0 {
+		return
+	}
+	// Rocky can leave fork tracepoint comm fields empty, so v1 trusts parent PID plus the accept FIFO.
+	accept := queue[0]
+	if len(queue) == 1 {
+		delete(p.pendingAccepts, event.ParentPID)
+	} else {
+		p.pendingAccepts[event.ParentPID] = queue[1:]
+	}
+
+	session := &sessionState{
+		rootPID:    event.PID,
+		remoteIP:   accept.remoteIP,
+		acceptTS:   accept.ts,
+		forkTS:     event.Timestamp,
+		deadline:   accept.ts.Add(p.timeout),
+		activePIDs: map[int32]struct{}{event.PID: {}},
+	}
+	p.sessions[session.rootPID] = session
+	p.procToRoot[event.PID] = session.rootPID
+	p.attachAcceptedIdentityFromPID(session.rootPID, event.PID)
+}
+
+func (p *processor) handleExecLocked(event traceEvent) {
+	rootPID, ok := p.procToRoot[event.PID]
+	if !ok {
+		return
+	}
+	session := p.sessions[rootPID]
+	if session == nil {
+		return
+	}
+	if !looksLikeShell(event.Comm) {
+		return
+	}
+	if !session.sawShellExec {
+		session.sawShellExec = true
+		session.shellExecTS = event.Timestamp
+	}
+	p.attachAcceptedIdentityFromPID(rootPID, event.PID)
+}
+
+func (p *processor) handleTTYWriteLocked(event traceEvent) {
+	rootPID, ok := p.procToRoot[event.PID]
+	if !ok {
+		return
+	}
+	session := p.sessions[rootPID]
+	if session == nil || session.sawTTYWrite || event.Bytes == 0 {
+		return
+	}
+	if session.firstTTYWriteTS.IsZero() {
+		session.firstTTYWriteTS = event.Timestamp
+	}
+	if !session.sawShellExec {
+		// tty write can arrive before shell exec or auth success, so keep the session buffered here.
+		p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+		return
+	}
+
+	if session.user == "" && session.remoteIP != "" {
+		p.attachAcceptedIdentityFromRemoteIP(rootPID)
+	}
+	if session.user != "" {
+		p.attachAcceptedIdentityFromTuple(rootPID)
+	}
+	if session.user == "" {
+		return
+	}
+
+	p.finalizeSessionLocked(rootPID)
+}
+
+func (p *processor) handleExitLocked(event traceEvent) {
+	rootPID, ok := p.procToRoot[event.PID]
+	if !ok {
+		return
+	}
+	session := p.sessions[rootPID]
+	if session == nil {
+		delete(p.procToRoot, event.PID)
+		return
+	}
+
+	delete(session.activePIDs, event.PID)
+	delete(p.procToRoot, event.PID)
+	if len(session.activePIDs) > 0 {
+		return
+	}
+	if !session.firstTTYWriteTS.IsZero() && !session.sawTTYWrite {
+		if session.user != "" {
+			if !session.sawShellExec {
+				// If exec was missed but first PTY output was observed, treat the session as usable and close it.
+				session.sawShellExec = true
+				session.shellExecTS = session.firstTTYWriteTS
+			}
+			p.finalizeSessionLocked(rootPID)
+			return
+		}
+		// Auth success can arrive after tty write, so keep only the root PID alive for later correlation.
+		session.activePIDs[rootPID] = struct{}{}
+		p.procToRoot[rootPID] = rootPID
+		return
+	}
+	if session.sawTTYWrite {
+		p.deleteSessionLocked(rootPID)
+		return
+	}
+	if session.sawShellExec {
+		p.failures.WithLabelValues(failureExitedBeforeUsable).Inc()
+	}
+	p.deleteSessionLocked(rootPID)
+}
+
+func (p *processor) attachAcceptedIdentityFromPID(rootPID, pid int32) {
+	auth, ok := p.acceptedByPID[pid]
+	if !ok {
+		return
+	}
+	if p.attachAcceptedIdentity(rootPID, auth) {
+		delete(p.acceptedByPID, pid)
+	}
+}
+
+func (p *processor) attachAcceptedIdentity(rootPID int32, auth acceptedAuth) bool {
+	session := p.sessions[rootPID]
+	if session == nil {
+		return false
+	}
+	session.user = auth.user
+	if auth.remoteIP != "" {
+		// Overwrite labels with auth.log values instead of trusting the eBPF-side guess.
+		session.remoteIP = auth.remoteIP
+	}
+	return true
+}
+
+func (p *processor) registerSessionFromAccept(rootPID int32, remoteIP, user string, acceptTS, forkTS time.Time) {
+	session := &sessionState{
+		rootPID:    rootPID,
+		remoteIP:   remoteIP,
+		user:       user,
+		acceptTS:   acceptTS,
+		forkTS:     forkTS,
+		deadline:   acceptTS.Add(p.timeout),
+		activePIDs: map[int32]struct{}{rootPID: {}},
+	}
+	p.sessions[rootPID] = session
+	p.procToRoot[rootPID] = rootPID
+	p.maybeFinalizeBufferedTTYWriteLocked(rootPID)
+}
+
+func (p *processor) maybeFinalizeBufferedTTYWriteLocked(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.sawTTYWrite || session.firstTTYWriteTS.IsZero() || session.user == "" {
+		return
+	}
+	if !session.sawShellExec {
+		session.sawShellExec = true
+		session.shellExecTS = session.firstTTYWriteTS
+	}
+	p.finalizeSessionLocked(rootPID)
+}
+
+func (p *processor) attachAcceptedIdentityFromTuple(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.user == "" || session.remoteIP == "" {
+		return
+	}
+	key := tupleKey{user: session.user, remoteIP: session.remoteIP}
+	queue := p.acceptedByTuple[key]
+	if len(queue) == 0 {
+		return
+	}
+	auth := queue[0]
+	if len(queue) == 1 {
+		delete(p.acceptedByTuple, key)
+	} else {
+		p.acceptedByTuple[key] = queue[1:]
+	}
+	p.attachAcceptedIdentity(rootPID, auth)
+}
+
+func (p *processor) attachAcceptedIdentityFromRemoteIP(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.remoteIP == "" {
+		return
+	}
+	// As a last resort for privsep-style PID splits, match auth success by remote_ip only.
+	for key, queue := range p.acceptedByTuple {
+		if key.remoteIP != session.remoteIP || len(queue) == 0 {
+			continue
+		}
+		auth := queue[0]
+		if len(queue) == 1 {
+			delete(p.acceptedByTuple, key)
+		} else {
+			p.acceptedByTuple[key] = queue[1:]
+		}
+		p.attachAcceptedIdentity(rootPID, auth)
+		return
+	}
+}
+
+func (p *processor) consumeAcceptByRemoteIP(remoteIP string) (acceptEntry, bool) {
+	for listenerPID, queue := range p.pendingAccepts {
+		for idx, accept := range queue {
+			if accept.remoteIP != remoteIP {
+				continue
+			}
+			if len(queue) == 1 {
+				delete(p.pendingAccepts, listenerPID)
+			} else {
+				p.pendingAccepts[listenerPID] = append(queue[:idx], queue[idx+1:]...)
+			}
+			return accept, true
+		}
+	}
+	return acceptEntry{}, false
+}
+
+func (p *processor) consumeOldestAccept() (acceptEntry, bool) {
+	var (
+		selectedPID int32
+		selected    acceptEntry
+		found       bool
+	)
+	for listenerPID, queue := range p.pendingAccepts {
+		if len(queue) == 0 {
+			continue
+		}
+		if !found || queue[0].ts.Before(selected.ts) {
+			selectedPID = listenerPID
+			selected = queue[0]
+			found = true
+		}
+	}
+	if !found {
+		return acceptEntry{}, false
+	}
+	queue := p.pendingAccepts[selectedPID]
+	if len(queue) == 1 {
+		delete(p.pendingAccepts, selectedPID)
+	} else {
+		p.pendingAccepts[selectedPID] = queue[1:]
+	}
+	return selected, true
+}
+
+func (p *processor) findOldestBufferedSessionLocked() (int32, bool) {
+	var (
+		selectedRoot int32
+		selectedTS   time.Time
+		found        bool
+	)
+	for rootPID, session := range p.sessions {
+		if session == nil || session.sawTTYWrite || session.firstTTYWriteTS.IsZero() {
+			continue
+		}
+		if !found || session.firstTTYWriteTS.Before(selectedTS) {
+			selectedRoot = rootPID
+			selectedTS = session.firstTTYWriteTS
+			found = true
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	return selectedRoot, true
+}
+
+func (p *processor) deleteSessionLocked(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil {
+		return
+	}
+	for pid := range session.activePIDs {
+		delete(p.procToRoot, pid)
+	}
+	delete(p.sessions, rootPID)
+}
+
+func (p *processor) finalizeSessionLocked(rootPID int32) {
+	session := p.sessions[rootPID]
+	if session == nil || session.sawTTYWrite || session.user == "" || session.firstTTYWriteTS.IsZero() {
+		return
+	}
+	session.sawTTYWrite = true
+	labels := []string{session.user, session.remoteIP}
+	p.acceptToShellUsable.WithLabelValues(labels...).Observe(session.firstTTYWriteTS.Sub(session.acceptTS).Seconds())
+	p.acceptToChildFork.WithLabelValues(labels...).Observe(session.forkTS.Sub(session.acceptTS).Seconds())
+	p.childForkToShellExec.WithLabelValues(labels...).Observe(session.shellExecTS.Sub(session.forkTS).Seconds())
+	p.shellExecToFirstTTYOutput.WithLabelValues(labels...).Observe(session.firstTTYWriteTS.Sub(session.shellExecTS).Seconds())
+	p.deleteSessionLocked(rootPID)
+}
+
+func looksLikeShell(comm string) bool {
+	comm = strings.TrimSpace(comm)
+	if idx := strings.LastIndex(comm, "/"); idx >= 0 {
+		comm = comm[idx+1:]
+	}
+	comm = strings.TrimPrefix(comm, "-")
+	switch comm {
+	case "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e traceEvent) String() string {
+	return fmt.Sprintf("kind=%d pid=%d ppid=%d comm=%q parent_comm=%q remote_ip=%q", e.Kind, e.PID, e.ParentPID, e.Comm, e.ParentComm, e.RemoteIP)
+}
+
+func lookupUsername(uid uint32) (string, bool) {
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		return "", false
+	}
+	if u.Username == "" {
+		return "", false
+	}
+	return u.Username, true
+}
+
+func (k traceEventKind) String() string {
+	switch k {
+	case traceEventAccept:
+		return "accept"
+	case traceEventFork:
+		return "fork"
+	case traceEventExec:
+		return "exec"
+	case traceEventTTYWrite:
+		return "tty_write"
+	case traceEventExit:
+		return "exit"
+	default:
+		return "unknown"
+	}
+}

@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -86,8 +86,8 @@ func loadConfigFromEnv() (config, error) {
 func newHarness(t *testing.T) (*harness, error) {
 	t.Helper()
 
-	if runtime.GOOS != "darwin" {
-		t.Skip("Rocky Lima e2e is supported only on macOS hosts")
+	if !supportsHostOS(runtimeGOOS()) {
+		t.Skip("Rocky Lima e2e requires a Linux or macOS host with limactl")
 	}
 	if _, err := exec.LookPath("limactl"); err != nil {
 		t.Skip("limactl is not installed")
@@ -153,6 +153,14 @@ func newHarness(t *testing.T) (*harness, error) {
 	return h, nil
 }
 
+func supportsHostOS(goos string) bool {
+	return goos == "darwin" || goos == "linux"
+}
+
+var runtimeGOOS = func() string {
+	return runtime.GOOS
+}
+
 func renderTemplate(cfg config, instanceName string, probeAuthorizedKey string) (string, error) {
 	tpl, err := template.New("rocky").Parse(rocky9Template)
 	if err != nil {
@@ -171,9 +179,11 @@ func renderTemplate(cfg config, instanceName string, probeAuthorizedKey string) 
 	return buf.String(), nil
 }
 
-func (h *harness) Start(t *testing.T) error {
+func (h *harness) Start(t *testing.T, exporterArgs ...string) error {
 	t.Helper()
 
+	// Do not use --plain here. This harness intentionally relies on Lima-managed
+	// SSH config, port forwarding for the metrics endpoint, and limactl copy.
 	if err := h.run("limactl", "create", "-y", "--name", h.instanceName, "--mount-none", h.templatePath); err != nil {
 		return fmt.Errorf("limactl create: %w", err)
 	}
@@ -204,7 +214,15 @@ func (h *harness) Start(t *testing.T) error {
 	if _, err := h.guestRootOutput("pkill -x ssh_session_exporter || true"); err != nil {
 		return fmt.Errorf("stop previous exporter: %w", err)
 	}
-	if _, err := h.guestRootOutput("nohup /usr/local/bin/ssh_session_exporter --web.listen-address=:" + strconv.Itoa(exporterPort) + " --auth-log.path=/var/log/secure >/tmp/ssh_session_exporter.log 2>&1 < /dev/null &"); err != nil {
+	exporterCmd := []string{
+		"nohup",
+		"/usr/local/bin/ssh_session_exporter",
+		"--web.listen-address=:" + strconv.Itoa(exporterPort),
+		"--auth-log.path=/var/log/secure",
+	}
+	exporterCmd = append(exporterCmd, exporterArgs...)
+	exporterCmd = append(exporterCmd, ">/tmp/ssh_session_exporter.log", "2>&1", "<", "/dev/null", "&")
+	if _, err := h.guestRootOutput(strings.Join(exporterCmd, " ")); err != nil {
 		return fmt.Errorf("start exporter: %w", err)
 	}
 	if err := h.waitForHTTPReady(2 * time.Minute); err != nil {
@@ -212,6 +230,57 @@ func (h *harness) Start(t *testing.T) error {
 	}
 
 	return nil
+}
+
+func (h *harness) StartInteractiveProbeSession(t *testing.T) (<-chan error, error) {
+	t.Helper()
+
+	if h.sshConfigFile == "" {
+		return nil, errors.New("ssh config file is empty")
+	}
+
+	cmd := exec.Command(
+		"ssh",
+		"-F", h.sshConfigFile,
+		"-o", "ControlMaster=no",
+		"-o", "ControlPath=none",
+		"-o", "ControlPersist=no",
+		"-o", "IdentitiesOnly=yes",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile="+filepath.Join(h.workDir, "known_hosts"),
+		"-o", "User=probe",
+		"-i", h.probePrivateKey,
+		"-tt",
+		h.sshAlias(),
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create probe ssh stdin pipe: %w", err)
+	}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start interactive probe ssh session: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		defer stdin.Close()
+		_, _ = io.WriteString(stdin, "printf '__probe_ready__\\n'\n")
+		_, _ = io.WriteString(stdin, "sleep 15\n")
+		_, _ = io.WriteString(stdin, "exit\n")
+	}()
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			done <- fmt.Errorf("interactive probe ssh session failed: %w\n%s", err, out.String())
+			return
+		}
+		done <- nil
+	}()
+
+	return done, nil
 }
 
 func (h *harness) StartProbeSession(t *testing.T) (<-chan error, error) {
@@ -516,11 +585,18 @@ func waitFor(timeout, interval time.Duration, fn func() error) error {
 }
 
 func ensurePortAvailable(port int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return err
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	// Retry briefly to tolerate TCP TIME_WAIT from a just-deleted Lima instance.
+	var lastErr error
+	for range 10 {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln.Close()
+		}
+		lastErr = err
+		time.Sleep(500 * time.Millisecond)
 	}
-	return ln.Close()
+	return lastErr
 }
 
 func getenvDefault(key, fallback string) string {

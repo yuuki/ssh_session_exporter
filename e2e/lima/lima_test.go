@@ -61,6 +61,24 @@ func TestRenderTemplate(t *testing.T) {
 	}
 }
 
+func TestSupportsHostOS(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		goos string
+		want bool
+	}{
+		{name: "darwin", goos: "darwin", want: true},
+		{name: "linux", goos: "linux", want: true},
+		{name: "windows", goos: "windows", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := supportsHostOS(tc.goos); got != tc.want {
+				t.Fatalf("supportsHostOS(%q) = %v, want %v", tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRockyLimaE2E_FailureArtifacts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Lima artifact test in short mode")
@@ -133,5 +151,54 @@ func TestRockyLimaE2E_PublicKeyLoginSetup(t *testing.T) {
 	}
 	if !strings.Contains(metrics, `method="publickey"`) || !strings.Contains(metrics, `user="probe"`) {
 		t.Fatalf("probe publickey auth success not observed in metrics:\n%s", metrics)
+	}
+}
+
+func TestRockyLimaE2E_EBPFShellUsableProbeStarts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Lima e2e in short mode")
+	}
+
+	h, err := newHarness(t)
+	if err != nil {
+		t.Fatalf("newHarness() error = %v", err)
+	}
+
+	if err := h.Start(t, "--ebpf.shell-usable.enabled"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	sessionDone, err := h.StartInteractiveProbeSession(t)
+	if err != nil {
+		t.Fatalf("StartInteractiveProbeSession() error = %v", err)
+	}
+	defer func() {
+		if err := <-sessionDone; err != nil {
+			t.Errorf("interactive probe session error: %v", err)
+		}
+	}()
+
+	if err := h.WaitForGuestAcceptance(t); err != nil {
+		t.Fatalf("WaitForGuestAcceptance() error = %v", err)
+	}
+
+	if err := h.WaitForProbeSession(t); err != nil {
+		t.Fatalf("WaitForProbeSession() error = %v", err)
+	}
+
+	metrics, err := h.WaitForMetrics(t,
+		`ssh_exporter_ebpf_shell_usable_up 1`,
+		`ssh_auth_success_total{`,
+		`user="probe"`,
+		`ssh_accept_to_shell_usable_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_accept_to_child_fork_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_child_fork_to_shell_exec_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+		`ssh_shell_exec_to_first_tty_output_seconds_count{remote_ip="192.168.5.2",user="probe"} 1`,
+	)
+	if err != nil {
+		t.Fatalf("WaitForMetrics() error = %v", err)
+	}
+	if !strings.Contains(metrics, `ssh_exporter_ebpf_shell_usable_up 1`) {
+		t.Fatalf("eBPF shell usable probe did not become healthy:\n%s", metrics)
 	}
 }

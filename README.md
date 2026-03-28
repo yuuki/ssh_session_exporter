@@ -21,13 +21,13 @@ make build
 
 ### Rocky Linux 9.6 Reproduction E2E
 
-For production-faithful SSH login reproduction on macOS, a separate Lima-based E2E suite boots a Rocky Linux 9.6 VM and uses a real `sshd`, `/var/log/secure`, and `utmp`.
+For production-faithful SSH login reproduction on Linux or macOS, a separate Lima-based E2E suite boots a Rocky Linux 9.6 VM and uses a real `sshd`, `/var/log/secure`, and `utmp`. The same suite also runs in GitHub Actions on a dedicated Ubuntu job via Lima.
 
 Prerequisites:
 
 - `limactl` 2.0+
 - `ssh`
-- macOS host with Lima support
+- Linux or macOS host with Lima support
 
 Run:
 
@@ -41,6 +41,8 @@ Optional environment variables:
 - `ROCKY_LIMA_KEEP_FAILED=1` - Keep the VM after a failed run
 - `ROCKY_LIMA_METRICS_PORT` - Host port forwarded to guest `:9842`
 - `ROCKY_LIMA_SSH_PORT` - Host port used for the Lima SSH endpoint
+
+This suite intentionally does not use Lima `--plain`. The harness depends on Lima-managed SSH config, host-to-guest port forwarding for `/metrics`, and `limactl copy` during guest initialization.
 
 Failure artifacts are written to `.e2e-artifacts/rocky-lima/<instance>/`.
 
@@ -56,6 +58,8 @@ ssh_session_exporter [flags]
 | `--web.telemetry-path` | `/metrics` | Path for metrics endpoint |
 | `--utmp.path` | `/var/run/utmp` | Path to utmp file |
 | `--auth-log.path` | `/var/log/auth.log` | Path to auth log file. When not explicitly set, falls back to `/var/log/secure` if present |
+| `--ebpf.shell-usable.enabled` | `false` | Enable eBPF-based interactive shell latency metrics |
+| `--ebpf.shell-usable.timeout` | `30s` | Timeout for eBPF shell latency correlation |
 
 ### Prometheus Configuration
 
@@ -85,6 +89,7 @@ WantedBy=multi-user.target
 ```
 
 Reading `/var/log/auth.log` requires root or membership in the `adm` group (Debian/Ubuntu).
+The optional eBPF shell latency probe also typically requires running as root. In addition, the host kernel must expose BTF metadata (for example `/sys/kernel/btf/vmlinux`) so the bundled CO-RE object can attach.
 
 When `--auth-log.path` is left at its default, the exporter automatically uses `/var/log/secure` on RHEL/CentOS if `/var/log/auth.log` does not exist. If you set `--auth-log.path` explicitly, that path is used as-is.
 
@@ -104,11 +109,24 @@ When `--auth-log.path` is left at its default, the exporter automatically uses `
 | `ssh_session_duration_seconds` | Histogram | `user` | Distribution of SSH session durations |
 | `ssh_login_setup_seconds` | Histogram | `user` | Time from authentication success to session appearing in utmp |
 | `ssh_auth_attempts_before_success` | Histogram | `user` | Failed authentication attempts before a successful login |
+| `ssh_accept_to_shell_usable_seconds` | Histogram | `user`, `remote_ip` | Time from `accept()` to the first PTY output for interactive SSH sessions |
+| `ssh_accept_to_child_fork_seconds` | Histogram | `user`, `remote_ip` | Time from `accept()` to the initial per-session sshd child fork |
+| `ssh_child_fork_to_shell_exec_seconds` | Histogram | `user`, `remote_ip` | Time from the initial per-session sshd child fork to shell exec |
+| `ssh_shell_exec_to_first_tty_output_seconds` | Histogram | `user`, `remote_ip` | Time from shell exec to the first PTY output |
+| `ssh_shell_usable_failures_total` | Counter | `stage` | Failures in eBPF shell latency correlation |
+| `ssh_exporter_ebpf_shell_usable_up` | Gauge | - | Whether the eBPF shell latency probe is attached and running |
 | `ssh_exporter_scrape_success` | Gauge | - | Whether the last scrape was successful |
 
 ### Note on Label Cardinality
 
 The `remote_ip` label on counters may produce high cardinality if many unique IPs connect. Use Prometheus `metric_relabel_configs` to aggregate or drop this label if needed.
+The eBPF latency histograms also include `remote_ip`, which can create a large number of time series on bastion hosts or Internet-facing SSH endpoints. Use relabeling aggressively if you do not need per-IP latency histograms.
+
+### eBPF shell latency semantics
+
+- The eBPF latency metrics only target **interactive PTY sessions**. Non-interactive sessions such as `scp`, `sftp`, and `ssh host cmd` are intentionally excluded.
+- `ssh_accept_to_shell_usable_seconds` uses the first PTY write as the "shell usable" proxy. This is close to user-perceived readiness, but it is not a literal prompt-render timestamp.
+- If the eBPF probe fails to attach, the exporter continues to expose the existing auth-log and utmp metrics, and `ssh_exporter_ebpf_shell_usable_up` remains `0`.
 
 ### Limitations of utmp-based event detection
 

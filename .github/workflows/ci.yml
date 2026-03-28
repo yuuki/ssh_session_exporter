@@ -32,3 +32,41 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make test-e2e
+
+  test-e2e-rocky:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Lima
+        uses: lima-vm/lima-actions/setup@v1
+        id: lima-actions-setup
+
+      - name: Cache ~/.cache/lima
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/lima
+          key: lima-${{ steps.lima-actions-setup.outputs.version }}
+
+      - name: Verify Lima
+        run: limactl --version
+
+      - name: Run Rocky Linux E2E
+        env:
+          ROCKY_LIMA_INSTANCE_PREFIX: gha-sshsess
+          ROCKY_LIMA_METRICS_PORT: "29842"
+          ROCKY_LIMA_SSH_PORT: "39222"
+        run: make test-e2e-rocky
+
+      - name: Upload Rocky E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocky-lima-artifacts
+          path: .e2e-artifacts/rocky-lima/
+          if-no-files-found: ignore

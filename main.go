@@ -18,6 +18,7 @@ import (
 
 	"github.com/yuuki/ssh_session_exporter/authlog"
 	"github.com/yuuki/ssh_session_exporter/collector"
+	"github.com/yuuki/ssh_session_exporter/ebpf/sessionlatency"
 	"github.com/yuuki/ssh_session_exporter/sessiontracker"
 	"github.com/yuuki/ssh_session_exporter/utmp"
 )
@@ -41,6 +42,10 @@ var (
 		"Path to the utmp file.")
 	authLogPath = flag.String("auth-log.path", defaultAuthLogPath,
 		"Path to the auth log file.")
+	ebpfShellUsableEnabled = flag.Bool("ebpf.shell-usable.enabled", false,
+		"Enable eBPF-based SSH shell usable latency metrics.")
+	ebpfShellUsableTimeout = flag.Duration("ebpf.shell-usable.timeout", 30*time.Second,
+		"Timeout for eBPF shell usable latency correlation.")
 	showVersion = flag.Bool("version", false, "Print version and exit.")
 )
 
@@ -81,6 +86,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	var shellProbe *sessionlatency.Probe
+	if *ebpfShellUsableEnabled {
+		shellProbe, err = sessionlatency.Start(ctx, reg, logger, sessionlatency.Options{
+			Timeout: *ebpfShellUsableTimeout,
+		})
+		if err != nil {
+			logger.Warn("failed to start eBPF shell usable probe, metrics will be unavailable", "error", err)
+		} else {
+			logger.Info("eBPF shell usable probe started")
+		}
+	}
+
 	// Correlator cleanup runs regardless of auth log availability,
 	// because Collect() parks pending sessions even without auth log.
 	go sshCollector.RunCleanup(ctx)
@@ -103,7 +120,9 @@ func main() {
 			logger.Warn("failed to start auth log watcher, auth metrics will be unavailable",
 				"path", resolvedAuthLogPath, "error", err)
 		} else {
-			go sshCollector.Run(ctx, authWatcher.Events())
+			collectorEvents := make(chan authlog.AuthEvent, 256)
+			go sshCollector.Run(ctx, collectorEvents)
+			go fanOutAuthEvents(ctx, authWatcher.Events(), collectorEvents, shellProbe)
 			logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
 		}
 	}
@@ -147,6 +166,30 @@ func main() {
 	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error", "error", err)
+	}
+}
+
+func fanOutAuthEvents(ctx context.Context, src <-chan authlog.AuthEvent, collectorEvents chan<- authlog.AuthEvent, shellProbe *sessionlatency.Probe) {
+	defer close(collectorEvents)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-src:
+			if !ok {
+				return
+			}
+
+			select {
+			case collectorEvents <- event:
+			case <-ctx.Done():
+				return
+			}
+			if shellProbe != nil {
+				shellProbe.HandleAuthEvent(event)
+			}
+		}
 	}
 }
 

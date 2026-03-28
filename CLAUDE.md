@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make build          # Cross-compile for Linux (GOOS=linux)
 make test           # go test ./...
 make vet            # GOOS=linux go vet ./...
-make test-e2e-rocky # Lima-based Rocky Linux 9.6 E2E (macOS local only)
+make test-e2e-rocky # Lima-based Rocky Linux 9.6 E2E (Linux/macOS host, incl. GitHub Actions)
 go test ./authlog/  # Run tests for a single package
 go test ./collector/ -run TestCollect_ActiveSessions  # Run a single test
 GOOS=linux go vet ./...   # Vet all packages (must target Linux)
@@ -16,7 +16,7 @@ GOOS=linux go build -o /dev/null .  # Verify compilation
 ```
 
 The `utmp` and `cmd` packages have `//go:build linux` constraints. Use `GOOS=linux` for vet/build. Tests in `utmp/` are skipped on macOS — this is expected.
-The Lima-based Rocky E2E suite is local-only and requires macOS with `limactl`; it is not part of the default CI job.
+The Lima-based Rocky E2E suite requires Linux or macOS with `limactl`. GitHub Actions runs it on a dedicated Ubuntu job via Lima.
 
 ## Architecture
 
