@@ -15,6 +15,16 @@ import (
 
 const defaultTimeout = 30 * time.Second
 
+const (
+	failureAcceptOrphaned    = "accept_orphaned"
+	failureForkUnmatched     = "fork_unmatched"
+	failureShellExecMissing  = "shell_exec_missing"
+	failureTTYWriteTimeout   = "tty_write_timeout"
+	failureIdentityUnmatched = "identity_unmatched"
+	failureExitedBeforeUsable = "exited_before_usable"
+	failureEventsDropped     = "events_dropped"
+)
+
 type Options struct {
 	Timeout time.Duration
 }
@@ -218,7 +228,7 @@ func (p *processor) cleanupExpired() {
 		kept := queue[:0]
 		for _, accept := range queue {
 			if now.Sub(accept.ts) > p.timeout {
-				p.failures.WithLabelValues("accept_orphaned").Inc()
+				p.failures.WithLabelValues(failureAcceptOrphaned).Inc()
 				continue
 			}
 			kept = append(kept, accept)
@@ -256,9 +266,9 @@ func (p *processor) cleanupExpired() {
 			continue
 		}
 		if session.sawShellExec {
-			p.failures.WithLabelValues("tty_write_timeout").Inc()
+			p.failures.WithLabelValues(failureTTYWriteTimeout).Inc()
 		} else {
-			p.failures.WithLabelValues("shell_exec_missing").Inc()
+			p.failures.WithLabelValues(failureShellExecMissing).Inc()
 		}
 		p.deleteSessionLocked(rootPID)
 	}
@@ -280,7 +290,7 @@ func (p *processor) handleForkLocked(event traceEvent) {
 
 	queue := p.pendingAccepts[event.ParentPID]
 	if len(queue) == 0 {
-		p.failures.WithLabelValues("fork_unmatched").Inc()
+		p.failures.WithLabelValues(failureForkUnmatched).Inc()
 		return
 	}
 	accept := queue[0]
@@ -291,7 +301,7 @@ func (p *processor) handleForkLocked(event traceEvent) {
 	}
 
 	session := &sessionState{
-		rootPID:    rootPIDFromEvent(event),
+		rootPID:    event.PID,
 		remoteIP:   accept.remoteIP,
 		acceptTS:   accept.ts,
 		forkTS:     event.Timestamp,
@@ -301,10 +311,6 @@ func (p *processor) handleForkLocked(event traceEvent) {
 	p.sessions[session.rootPID] = session
 	p.procToRoot[event.PID] = session.rootPID
 	p.attachAcceptedIdentityFromPID(session.rootPID, event.PID)
-}
-
-func rootPIDFromEvent(event traceEvent) int32 {
-	return event.PID
 }
 
 func (p *processor) handleExecLocked(event traceEvent) {
@@ -343,7 +349,7 @@ func (p *processor) handleTTYWriteLocked(event traceEvent) {
 		}
 	}
 	if !session.sawShellExec {
-		p.failures.WithLabelValues("shell_exec_missing").Inc()
+		p.failures.WithLabelValues(failureShellExecMissing).Inc()
 		p.deleteSessionLocked(rootPID)
 		return
 	}
@@ -352,7 +358,7 @@ func (p *processor) handleTTYWriteLocked(event traceEvent) {
 		p.attachAcceptedIdentityFromTuple(rootPID)
 	}
 	if session.user == "" {
-		p.failures.WithLabelValues("identity_unmatched").Inc()
+		p.failures.WithLabelValues(failureIdentityUnmatched).Inc()
 		p.deleteSessionLocked(rootPID)
 		return
 	}
@@ -388,7 +394,7 @@ func (p *processor) handleExitLocked(event traceEvent) {
 		return
 	}
 	if session.sawShellExec {
-		p.failures.WithLabelValues("exited_before_usable").Inc()
+		p.failures.WithLabelValues(failureExitedBeforeUsable).Inc()
 	}
 	p.deleteSessionLocked(rootPID)
 }
