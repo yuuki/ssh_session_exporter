@@ -18,6 +18,6 @@ type AuthEvent struct {
 	User      string
 	RemoteIP  string
 	Method    string    // "password", "publickey", etc.
-	PID       int32     // sshd process ID from sshd[PID]
+	PID       int32     // sshd / sshd-session / sshd-auth process ID from the syslog tag
 	Timestamp time.Time // log line timestamp
 }
