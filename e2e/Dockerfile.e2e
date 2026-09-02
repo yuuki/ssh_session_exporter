@@ -1,5 +1,5 @@
 # Stage 1: Build exporter and utmpwriter
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
