@@ -7,25 +7,31 @@ import (
 	"time"
 )
 
+// sshdTag matches the syslog process tag used by OpenSSH:
+//   - sshd[PID]           (classic / listener)
+//   - sshd-session[PID]   (OpenSSH 9.8+ per-session binary)
+//   - sshd-auth[PID]      (OpenSSH 10.0+ auth binary)
+const sshdTag = `sshd(?:-session|-auth)?\[(\d+)\]`
+
 var (
 	// "Failed password for user from 192.168.1.1 port 22 ssh2"
 	// "Failed keyboard-interactive/pam for user from 192.168.1.1 port 22 ssh2"
 	reFailedAuth = regexp.MustCompile(
-		`sshd\[(\d+)\]: Failed ([\w-]+(?:/\w+)*) for (?:invalid user )?(\S+) from (\S+) port (\d+)`,
+		sshdTag + `: Failed ([\w-]+(?:/\w+)*) for (?:invalid user )?(\S+) from (\S+) port (\d+)`,
 	)
 	// "Accepted publickey for alice from 192.168.1.10 port 54321 ssh2"
 	// "Accepted keyboard-interactive/pam for alice from 192.168.1.10 port 22 ssh2"
 	reAcceptedAuth = regexp.MustCompile(
-		`sshd\[(\d+)\]: Accepted ([\w-]+(?:/\w+)*) for (\S+) from (\S+) port (\d+)`,
+		sshdTag + `: Accepted ([\w-]+(?:/\w+)*) for (\S+) from (\S+) port (\d+)`,
 	)
 	// "Invalid user admin from 10.0.0.5 port 22"
 	reInvalidUser = regexp.MustCompile(
-		`sshd\[(\d+)\]: Invalid user (\S+) from (\S+)`,
+		sshdTag + `: Invalid user (\S+) from (\S+)`,
 	)
 	// "Disconnected from authenticating user root 10.0.0.1 port 22 [preauth]"
 	// "Connection closed by authenticating user root 10.0.0.1 port 22 [preauth]"
 	rePreauthDisconn = regexp.MustCompile(
-		`sshd\[(\d+)\]: (?:Disconnected from|Connection closed by) authenticating user (\S+) (\S+) port \d+ \[preauth\]`,
+		sshdTag + `: (?:Disconnected from|Connection closed by) authenticating user (\S+) (\S+) port \d+ \[preauth\]`,
 	)
 )
 
@@ -64,7 +70,7 @@ func parseTimestamp(line string) time.Time {
 // ParseLine parses a single auth log line and returns an AuthEvent if it
 // matches a recognised SSH authentication pattern. Returns nil for non-matching lines.
 func ParseLine(line string) *AuthEvent {
-	if !strings.Contains(line, "sshd[") {
+	if !strings.Contains(line, "sshd") {
 		return nil
 	}
 

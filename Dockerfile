@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
