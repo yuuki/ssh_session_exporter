@@ -236,6 +236,20 @@ func waitForPolls() {
 	time.Sleep(300 * time.Millisecond)
 }
 
+// expectNoMoreEvents fails if anything arrives within several polls, which is
+// how a watcher that rereads a file it has already consumed shows itself.
+func expectNoMoreEvents(t *testing.T, w *FileWatcher) {
+	t.Helper()
+	select {
+	case e, ok := <-w.Events():
+		if !ok {
+			t.Fatal("events channel closed unexpectedly")
+		}
+		t.Fatalf("unexpected extra event: %+v", e)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 func TestFileWatcher_JoinsLineSplitAcrossReads(t *testing.T) {
 	logFile := newEmptyLogFile(t)
 	w := startTestWatcher(t, logFile, slog.Default())
@@ -265,6 +279,7 @@ func TestFileWatcher_FollowsCopyTruncateRotation(t *testing.T) {
 	if e := receiveEvent(t, w); e.User != "bob" || e.PID != 2002 {
 		t.Errorf("unexpected event after truncation: %+v", e)
 	}
+	expectNoMoreEvents(t, w)
 }
 
 func TestFileWatcher_FollowsRenameRotation(t *testing.T) {
@@ -285,6 +300,7 @@ func TestFileWatcher_FollowsRenameRotation(t *testing.T) {
 	if e := receiveEvent(t, w); e.User != "bob" || e.PID != 2002 {
 		t.Errorf("unexpected event after rotation: %+v", e)
 	}
+	expectNoMoreEvents(t, w)
 }
 
 func TestFileWatcher_KeepsPollingWhileFileIsMissing(t *testing.T) {
@@ -306,6 +322,7 @@ func TestFileWatcher_KeepsPollingWhileFileIsMissing(t *testing.T) {
 	if e := receiveEvent(t, w); e.User != "bob" || e.PID != 2002 {
 		t.Errorf("unexpected event after the file came back: %+v", e)
 	}
+	expectNoMoreEvents(t, w)
 }
 
 func TestFileWatcher_DropsPartialLineOnRotation(t *testing.T) {
@@ -327,10 +344,18 @@ func TestFileWatcher_DropsPartialLineOnRotation(t *testing.T) {
 	if e.User != "bob" || e.PID != 2002 || e.Timestamp.Format("15:04:05") != "12:00:05" {
 		t.Errorf("unexpected event after rotation: %+v", e)
 	}
+	expectNoMoreEvents(t, w)
 }
 
 func TestFileWatcher_StopsWhenReopenFails(t *testing.T) {
-	logFile := newEmptyLogFile(t)
+	// The socket below needs a path within sun_path (104 bytes on macOS),
+	// which a temporary directory under a long TMPDIR exceeds. Watching a
+	// relative path keeps it short wherever the directory lives.
+	t.Chdir(t.TempDir())
+	logFile := "auth.log"
+	if err := os.WriteFile(logFile, nil, 0644); err != nil {
+		t.Fatalf("create file: %v", err)
+	}
 	var logs syncBuffer
 	w := startTestWatcher(t, logFile, slog.New(slog.NewTextHandler(&logs, nil)))
 
@@ -340,7 +365,7 @@ func TestFileWatcher_StopsWhenReopenFails(t *testing.T) {
 	}
 
 	// A unix socket stats as an empty file, which reads as rotation, but
-	// open(2) refuses it with ENXIO, even for root.
+	// open(2) refuses it (ENXIO on Linux, EOPNOTSUPP on macOS), even for root.
 	if err := os.Remove(logFile); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
