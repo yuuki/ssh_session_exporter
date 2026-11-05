@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make build          # Cross-compile for Linux (GOOS=linux)
 make test           # go test ./...
 make vet            # GOOS=linux go vet ./...
-make complexity     # cccc complexity ranking (needs cccc; settings in cccc.toml)
+make complexity     # cccc complexity ranking (needs cccc; fails above max-cognitive in cccc.toml)
 make test-e2e-rocky # Lima-based Rocky Linux 9.6 E2E (Linux/macOS host, incl. GitHub Actions)
 go test ./authlog/  # Run tests for a single package
 go test ./collector/ -run TestCollect_ActiveSessions  # Run a single test
