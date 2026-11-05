@@ -1,0 +1,60 @@
+{
+  "repository": "yuuki/ssh_session_exporter/complexity",
+  "ref": "refs/heads/main",
+  "commit": "2ed33e0df12c8ed801f4a7947abc4df667060f58",
+  "base_ref": "refs/heads/main",
+  "timestamp": "2026-11-05T13:08:10.614777063Z",
+  "custom_metrics": [
+    {
+      "key": "code_complexity",
+      "name": "Code Complexity",
+      "metrics": [
+        {
+          "key": "function_count",
+          "name": "Function count",
+          "value": 89
+        },
+        {
+          "key": "cognitive_sum",
+          "name": "Cognitive: total",
+          "value": 305
+        },
+        {
+          "key": "cognitive_max",
+          "name": "Cognitive: max",
+          "value": 13
+        },
+        {
+          "key": "cognitive_median",
+          "name": "Cognitive: median",
+          "value": 2
+        },
+        {
+          "key": "cognitive_p90",
+          "name": "Cognitive: p90",
+          "value": 9
+        },
+        {
+          "key": "cyclomatic_sum",
+          "name": "Cyclomatic: total",
+          "value": 335
+        },
+        {
+          "key": "cyclomatic_max",
+          "name": "Cyclomatic: max",
+          "value": 11
+        },
+        {
+          "key": "cyclomatic_median",
+          "name": "Cyclomatic: median",
+          "value": 3
+        },
+        {
+          "key": "cyclomatic_p90",
+          "name": "Cyclomatic: p90",
+          "value": 7
+        }
+      ]
+    }
+  ]
+}
