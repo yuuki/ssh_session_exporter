@@ -187,14 +187,16 @@ On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it aga
 
 CI measures Cognitive and Cyclomatic Complexity with
 [cccc](https://github.com/moznion/cccc) on pull requests and pushes to `main`
-and writes the totals and the 20 most complex functions to the job summary
-(`.github/workflows/complexity.yml`). The job fails when a function's cognitive
-complexity exceeds `max-cognitive` in `cccc.toml`, set to 15, SonarSource's
-default: split a function that exceeds it rather than raising the threshold.
-`cccc.toml` also sets what is analyzed: tests, generated code, vendored sources
-and BPF programs are excluded. To see the same ranking locally, install cccc (a
+(`.github/workflows/complexity.yml`) and fails when a function's cognitive
+complexity exceeds `max-cognitive` in `cccc.toml`; the job summary lists the
+functions above it and the 20 most complex ones. The threshold is 15,
+SonarSource's default: split a function that would exceed it rather than
+raising the threshold. `cccc.toml` also lists what is not analyzed, such as
+tests and generated or vendored code; the BPF programs are exempt because the
+verifier constrains how they can be split. To check locally, install cccc (a
 [release binary](https://github.com/moznion/cccc/releases) or `cargo install
-cccc-cli`) and run `make complexity`.
+cccc-cli`) and run `make complexity`, which ranks the most complex functions
+and fails the same way.
 
 ### Release Procedure
 
