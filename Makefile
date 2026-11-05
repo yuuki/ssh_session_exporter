@@ -4,7 +4,7 @@ GOOS    := linux
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build test vet clean install test-e2e test-e2e-rocky
+.PHONY: build test vet complexity clean install test-e2e test-e2e-rocky
 
 build:
 	GOOS=$(GOOS) go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -14,6 +14,11 @@ test:
 
 vet:
 	GOOS=linux go vet ./...
+
+# Rank the most complex functions with cccc (https://github.com/moznion/cccc);
+# what is analyzed is configured in cccc.toml.
+complexity:
+	cccc --table --top-cognitive 20 .
 
 clean:
 	rm -f $(BINARY)
