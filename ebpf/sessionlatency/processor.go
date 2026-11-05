@@ -238,6 +238,13 @@ func (p *processor) cleanupExpired() {
 	defer p.mu.Unlock()
 
 	now := p.now()
+	p.expirePendingAcceptsLocked(now)
+	p.expireAcceptedByPIDLocked(now)
+	p.expireAcceptedByTupleLocked(now)
+	p.expireSessionsLocked(now)
+}
+
+func (p *processor) expirePendingAcceptsLocked(now time.Time) {
 	for pid, queue := range p.pendingAccepts {
 		kept := queue[:0]
 		for _, accept := range queue {
@@ -253,13 +260,17 @@ func (p *processor) cleanupExpired() {
 			p.pendingAccepts[pid] = kept
 		}
 	}
+}
 
+func (p *processor) expireAcceptedByPIDLocked(now time.Time) {
 	for pid, auth := range p.acceptedByPID {
 		if now.After(auth.expires) {
 			delete(p.acceptedByPID, pid)
 		}
 	}
+}
 
+func (p *processor) expireAcceptedByTupleLocked(now time.Time) {
 	for key, queue := range p.acceptedByTuple {
 		kept := queue[:0]
 		for _, auth := range queue {
@@ -274,7 +285,11 @@ func (p *processor) cleanupExpired() {
 			p.acceptedByTuple[key] = kept
 		}
 	}
+}
 
+// expireSessionsLocked gives up on sessions that reached their deadline without
+// PTY output, counting the stage they got stuck in.
+func (p *processor) expireSessionsLocked(now time.Time) {
 	for rootPID, session := range p.sessions {
 		if now.Before(session.deadline) || session.sawTTYWrite {
 			continue
