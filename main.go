@@ -88,14 +88,7 @@ func main() {
 
 	var shellProbe *sessionlatency.Probe
 	if *ebpfShellUsableEnabled {
-		shellProbe, err = sessionlatency.Start(ctx, reg, logger, sessionlatency.Options{
-			Timeout: *ebpfShellUsableTimeout,
-		})
-		if err != nil {
-			logger.Warn("failed to start eBPF shell usable probe, metrics will be unavailable", "error", err)
-		} else {
-			logger.Info("eBPF shell usable probe started")
-		}
+		shellProbe = startShellProbe(ctx, reg, logger)
 	}
 
 	// Correlator cleanup runs regardless of auth log availability,
@@ -103,29 +96,7 @@ func main() {
 	go sshCollector.RunCleanup(ctx)
 
 	// Auth log watcher (optional — continue without it if unavailable).
-	resolvedAuthLogPath, ok := resolveAuthLogPath(*authLogPath, flagWasExplicitlySet("auth-log.path"), defaultAuthLogCandidates, authLogExists)
-	var authWatcher *authlog.FileWatcher
-	if !ok {
-		logger.Info("auth log watcher disabled because no auth log file was found",
-			"candidates", defaultAuthLogCandidates)
-	} else {
-		if resolvedAuthLogPath != *authLogPath {
-			logger.Info("using fallback auth log path",
-				"configured_path", *authLogPath,
-				"path", resolvedAuthLogPath)
-		}
-
-		authWatcher = authlog.NewFileWatcher(resolvedAuthLogPath, logger)
-		if err := authWatcher.Start(ctx); err != nil {
-			logger.Warn("failed to start auth log watcher, auth metrics will be unavailable",
-				"path", resolvedAuthLogPath, "error", err)
-		} else {
-			collectorEvents := make(chan authlog.AuthEvent, 256)
-			go sshCollector.Run(ctx, collectorEvents)
-			go fanOutAuthEvents(ctx, authWatcher.Events(), collectorEvents, shellProbe)
-			logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
-		}
-	}
+	authWatcher := startAuthLogWatcher(ctx, logger, sshCollector, shellProbe)
 
 	// HTTP server.
 	mux := http.NewServeMux()
@@ -167,6 +138,49 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error", "error", err)
 	}
+}
+
+// startShellProbe starts the optional eBPF probe. A failure costs only the
+// shell usable metrics, so it is logged and the exporter carries on.
+func startShellProbe(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger) *sessionlatency.Probe {
+	shellProbe, err := sessionlatency.Start(ctx, reg, logger, sessionlatency.Options{
+		Timeout: *ebpfShellUsableTimeout,
+	})
+	if err != nil {
+		logger.Warn("failed to start eBPF shell usable probe, metrics will be unavailable", "error", err)
+	} else {
+		logger.Info("eBPF shell usable probe started")
+	}
+	return shellProbe
+}
+
+// startAuthLogWatcher feeds the auth log to the collector and the shell probe.
+// It returns nil only when no auth log was found; a watcher that failed to
+// start is still returned, and stopping it is harmless.
+func startAuthLogWatcher(ctx context.Context, logger *slog.Logger, sshCollector *collector.SSHCollector, shellProbe *sessionlatency.Probe) *authlog.FileWatcher {
+	resolvedAuthLogPath, ok := resolveAuthLogPath(*authLogPath, flagWasExplicitlySet("auth-log.path"), defaultAuthLogCandidates, authLogExists)
+	if !ok {
+		logger.Info("auth log watcher disabled because no auth log file was found",
+			"candidates", defaultAuthLogCandidates)
+		return nil
+	}
+	if resolvedAuthLogPath != *authLogPath {
+		logger.Info("using fallback auth log path",
+			"configured_path", *authLogPath,
+			"path", resolvedAuthLogPath)
+	}
+
+	authWatcher := authlog.NewFileWatcher(resolvedAuthLogPath, logger)
+	if err := authWatcher.Start(ctx); err != nil {
+		logger.Warn("failed to start auth log watcher, auth metrics will be unavailable",
+			"path", resolvedAuthLogPath, "error", err)
+		return authWatcher
+	}
+	collectorEvents := make(chan authlog.AuthEvent, 256)
+	go sshCollector.Run(ctx, collectorEvents)
+	go fanOutAuthEvents(ctx, authWatcher.Events(), collectorEvents, shellProbe)
+	logger.Info("auth log watcher started", "path", resolvedAuthLogPath)
+	return authWatcher
 }
 
 func fanOutAuthEvents(ctx context.Context, src <-chan authlog.AuthEvent, collectorEvents chan<- authlog.AuthEvent, shellProbe *sessionlatency.Probe) {
