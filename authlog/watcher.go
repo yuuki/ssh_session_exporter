@@ -61,54 +61,86 @@ func (w *FileWatcher) run(ctx context.Context, f *os.File, offset int64) {
 	defer ticker.Stop()
 
 	buf := make([]byte, 32*1024)
-	var partial string
+	tail := tailState{f: f, offset: offset}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, readErr := f.Read(buf)
-			if n > 0 {
-				offset += int64(n)
-				lines, remainder := splitLines(partial + string(buf[:n]))
-				partial = remainder
-				for _, line := range lines {
-					event := ParseLine(line)
-					if event == nil {
-						continue
-					}
-					select {
-					case w.events <- *event:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-			if readErr != nil && readErr != io.EOF {
-				w.logger.Warn("read error", "error", readErr)
-			}
-
-			// Check for log rotation only when at EOF (no new data).
-			if n == 0 {
-				fi, statErr := os.Stat(w.path)
-				if statErr != nil {
-					continue
-				}
-				if fi.Size() < offset {
-					f.Close()
-					var err error
-					f, err = os.Open(w.path)
-					if err != nil {
-						w.logger.Warn("reopen file", "error", err)
-						return
-					}
-					offset = 0
-					partial = ""
-				}
+			if !w.poll(ctx, &tail, buf) {
+				return
 			}
 		}
 	}
+}
+
+// tailState is what the watcher carries from one poll to the next.
+type tailState struct {
+	f       *os.File
+	offset  int64
+	partial string // text after the last newline, completed by a later read
+}
+
+// poll reads what was appended since the previous tick and emits its events.
+// It reports false when the watcher has to stop.
+func (w *FileWatcher) poll(ctx context.Context, tail *tailState, buf []byte) bool {
+	n, readErr := tail.f.Read(buf)
+	if n > 0 {
+		tail.offset += int64(n)
+		lines, remainder := splitLines(tail.partial + string(buf[:n]))
+		tail.partial = remainder
+		if !w.emitLines(ctx, lines) {
+			return false
+		}
+	}
+	if readErr != nil && readErr != io.EOF {
+		w.logger.Warn("read error", "error", readErr)
+	}
+
+	// Check for log rotation only when at EOF (no new data).
+	if n == 0 {
+		return w.reopenIfRotated(tail)
+	}
+	return true
+}
+
+// emitLines sends the events of the recognised lines in order. It reports
+// false when ctx ends while the consumer is not keeping up.
+func (w *FileWatcher) emitLines(ctx context.Context, lines []string) bool {
+	for _, line := range lines {
+		event := ParseLine(line)
+		if event == nil {
+			continue
+		}
+		select {
+		case w.events <- *event:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+// reopenIfRotated treats a file at w.path that is smaller than what has been
+// read as a rotated log and restarts from its beginning. A missing file is
+// waited for. It reports false when the new file cannot be opened.
+func (w *FileWatcher) reopenIfRotated(tail *tailState) bool {
+	fi, statErr := os.Stat(w.path)
+	if statErr != nil || fi.Size() >= tail.offset {
+		return true
+	}
+
+	tail.f.Close()
+	f, err := os.Open(w.path)
+	if err != nil {
+		w.logger.Warn("reopen file", "error", err)
+		return false
+	}
+	tail.f = f
+	tail.offset = 0
+	tail.partial = ""
+	return true
 }
 
 // splitLines returns complete lines and the remaining partial line.

@@ -133,12 +133,21 @@ func (c *sessionCorrelator) Cleanup() {
 	defer c.mu.Unlock()
 	cutoff := time.Now().Add(-c.ttl)
 
+	c.evictPIDsLocked(cutoff)
+	c.evictAcceptsLocked(cutoff)
+	c.evictPendingSessionsLocked(cutoff)
+}
+
+func (c *sessionCorrelator) evictPIDsLocked(cutoff time.Time) {
 	for pid, s := range c.pids {
 		if s.createdAt.Before(cutoff) {
 			delete(c.pids, pid)
 		}
 	}
+}
 
+// evictAcceptsLocked drops the expired head of each accept queue.
+func (c *sessionCorrelator) evictAcceptsLocked(cutoff time.Time) {
 	for key, queue := range c.accepts {
 		i := 0
 		for i < len(queue) && queue[i].createdAt.Before(cutoff) {
@@ -150,7 +159,11 @@ func (c *sessionCorrelator) Cleanup() {
 			c.accepts[key] = queue[i:]
 		}
 	}
+}
 
+// evictPendingSessionsLocked drops the expired head of each pending session
+// queue; a pending session ages by its login time.
+func (c *sessionCorrelator) evictPendingSessionsLocked(cutoff time.Time) {
 	for key, queue := range c.pendingSessions {
 		i := 0
 		for i < len(queue) && queue[i].loginTime.Before(cutoff) {

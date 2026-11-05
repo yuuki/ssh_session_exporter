@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -193,5 +194,57 @@ func TestCorrelator_CleanupAccepts(t *testing.T) {
 	_, ok := c.ConsumeAccept("alice", "10.0.0.1")
 	if ok {
 		t.Error("expected ConsumeAccept to return false after cleanup evicted accept")
+	}
+}
+
+func TestCorrelator_CleanupEvictsOnlyTheExpiredHeadOfEachQueue(t *testing.T) {
+	c := newSessionCorrelator(5 * time.Minute)
+	// Far from the cutoff on both sides, so the moment Cleanup reads the
+	// clock does not matter.
+	stale := time.Now().Add(-time.Hour)
+	fresh := time.Now().Add(time.Hour)
+	ts := func(sec int) time.Time { return time.Date(2026, 3, 27, 12, 0, sec, 0, time.UTC) }
+
+	c.pids[1] = &pidState{failedAttempts: 1, createdAt: stale}
+	c.pids[2] = &pidState{failedAttempts: 2, createdAt: fresh}
+
+	partly := correlationKey{"alice", "10.0.0.1"}
+	shielded := correlationKey{"bob", "10.0.0.2"} // a fresh head keeps a stale entry behind it
+	gone := correlationKey{"carol", "10.0.0.3"}
+
+	c.accepts[partly] = []acceptEntry{
+		{timestamp: ts(1), createdAt: stale},
+		{timestamp: ts(2), createdAt: stale},
+		{timestamp: ts(3), createdAt: fresh},
+	}
+	c.accepts[shielded] = []acceptEntry{
+		{timestamp: ts(4), createdAt: fresh},
+		{timestamp: ts(5), createdAt: stale},
+	}
+	c.accepts[gone] = []acceptEntry{{timestamp: ts(6), createdAt: stale}}
+
+	// Pending sessions age by their login time.
+	c.pendingSessions[partly] = []pendingSessionEntry{{loginTime: stale}, {loginTime: fresh}}
+	c.pendingSessions[shielded] = []pendingSessionEntry{{loginTime: fresh}, {loginTime: stale}}
+	c.pendingSessions[gone] = []pendingSessionEntry{{loginTime: stale}}
+
+	c.Cleanup()
+
+	if len(c.pids) != 1 || c.pids[2] == nil {
+		t.Errorf("expected only PID 2 to survive, got %+v", c.pids)
+	}
+	wantAccepts := map[correlationKey][]acceptEntry{
+		partly:   {{timestamp: ts(3), createdAt: fresh}},
+		shielded: {{timestamp: ts(4), createdAt: fresh}, {timestamp: ts(5), createdAt: stale}},
+	}
+	if !reflect.DeepEqual(c.accepts, wantAccepts) {
+		t.Errorf("accepts = %+v, want %+v", c.accepts, wantAccepts)
+	}
+	wantPending := map[correlationKey][]pendingSessionEntry{
+		partly:   {{loginTime: fresh}},
+		shielded: {{loginTime: fresh}, {loginTime: stale}},
+	}
+	if !reflect.DeepEqual(c.pendingSessions, wantPending) {
+		t.Errorf("pendingSessions = %+v, want %+v", c.pendingSessions, wantPending)
 	}
 }

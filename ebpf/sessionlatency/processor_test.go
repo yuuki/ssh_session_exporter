@@ -2,6 +2,7 @@ package sessionlatency
 
 import (
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -149,6 +150,92 @@ func TestProcessorTracksTimeoutAndExitFailurePaths(t *testing.T) {
 	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "exited_before_usable"}, 1)
 	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "identity_unmatched"}, 0)
 	assertHistogramCount(t, reg, "ssh_accept_to_shell_usable_seconds", map[string]string{"user": "alice", "remote_ip": "203.0.113.3"}, 0)
+}
+
+func TestProcessorCleanupExpiredDropsOnlyStaleState(t *testing.T) {
+	reg := prometheus.NewPedanticRegistry()
+	now := time.Unix(1_700_000_300, 0)
+	const timeout = 5 * time.Second
+
+	p, err := newProcessor(reg, slog.Default(), Options{Timeout: timeout})
+	if err != nil {
+		t.Fatalf("newProcessor: %v", err)
+	}
+	p.now = func() time.Time { return now }
+
+	// Accepts expire strictly after the timeout; auths strictly after expires;
+	// sessions once the deadline is reached.
+	p.pendingAccepts[10] = []acceptEntry{
+		{remoteIP: "192.0.2.1", ts: now.Add(-timeout - time.Second)},
+		{remoteIP: "192.0.2.2", ts: now.Add(-timeout)},
+		{remoteIP: "192.0.2.3", ts: now.Add(-time.Second)},
+	}
+	p.pendingAccepts[11] = []acceptEntry{{remoteIP: "192.0.2.4", ts: now.Add(-2 * timeout)}}
+
+	p.acceptedByPID[100] = acceptedAuth{user: "stale", expires: now.Add(-time.Nanosecond)}
+	p.acceptedByPID[101] = acceptedAuth{user: "boundary", expires: now}
+	p.acceptedByPID[102] = acceptedAuth{user: "fresh", expires: now.Add(time.Second)}
+
+	mixed := tupleKey{user: "alice", remoteIP: "192.0.2.10"}
+	expired := tupleKey{user: "bob", remoteIP: "192.0.2.11"}
+	p.acceptedByTuple[mixed] = []acceptedAuth{
+		{user: "alice", remoteIP: "192.0.2.10", expires: now.Add(-time.Second)},
+		{user: "alice", remoteIP: "192.0.2.10", expires: now},
+		{user: "alice", remoteIP: "192.0.2.10", expires: now.Add(time.Second)},
+	}
+	p.acceptedByTuple[expired] = []acceptedAuth{{user: "bob", remoteIP: "192.0.2.11", expires: now.Add(-time.Second)}}
+
+	addSession := func(rootPID int32, deadline time.Time, sawShellExec, sawTTYWrite bool) {
+		p.sessions[rootPID] = &sessionState{
+			rootPID:      rootPID,
+			deadline:     deadline,
+			sawShellExec: sawShellExec,
+			sawTTYWrite:  sawTTYWrite,
+			activePIDs:   map[int32]struct{}{rootPID: {}, rootPID + 1: {}},
+		}
+		p.procToRoot[rootPID] = rootPID
+		p.procToRoot[rootPID+1] = rootPID
+	}
+	addSession(200, now.Add(-time.Second), true, false) // shell ran, never wrote
+	addSession(210, now.Add(-time.Second), false, false)
+	addSession(220, now, false, false)
+	addSession(230, now.Add(time.Second), false, false)
+	addSession(240, now.Add(-time.Second), true, true)
+
+	p.cleanupExpired()
+
+	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "accept_orphaned"}, 2)
+	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "tty_write_timeout"}, 1)
+	assertCounterValue(t, reg, "ssh_shell_usable_failures_total", map[string]string{"stage": "shell_exec_missing"}, 2)
+
+	wantAccepts := map[int32][]acceptEntry{10: {
+		{remoteIP: "192.0.2.2", ts: now.Add(-timeout)},
+		{remoteIP: "192.0.2.3", ts: now.Add(-time.Second)},
+	}}
+	if !reflect.DeepEqual(p.pendingAccepts, wantAccepts) {
+		t.Errorf("pendingAccepts = %+v, want %+v", p.pendingAccepts, wantAccepts)
+	}
+	wantByPID := map[int32]acceptedAuth{
+		101: {user: "boundary", expires: now},
+		102: {user: "fresh", expires: now.Add(time.Second)},
+	}
+	if !reflect.DeepEqual(p.acceptedByPID, wantByPID) {
+		t.Errorf("acceptedByPID = %+v, want %+v", p.acceptedByPID, wantByPID)
+	}
+	wantByTuple := map[tupleKey][]acceptedAuth{mixed: {
+		{user: "alice", remoteIP: "192.0.2.10", expires: now},
+		{user: "alice", remoteIP: "192.0.2.10", expires: now.Add(time.Second)},
+	}}
+	if !reflect.DeepEqual(p.acceptedByTuple, wantByTuple) {
+		t.Errorf("acceptedByTuple = %+v, want %+v", p.acceptedByTuple, wantByTuple)
+	}
+	if len(p.sessions) != 2 || p.sessions[230] == nil || p.sessions[240] == nil {
+		t.Errorf("expected only sessions 230 and 240 to survive, got %+v", p.sessions)
+	}
+	wantProcToRoot := map[int32]int32{230: 230, 231: 230, 240: 240, 241: 240}
+	if !reflect.DeepEqual(p.procToRoot, wantProcToRoot) {
+		t.Errorf("procToRoot = %v, want %v", p.procToRoot, wantProcToRoot)
+	}
 }
 
 func assertHistogramCount(t *testing.T, reg *prometheus.Registry, name string, labels map[string]string, want uint64) {
