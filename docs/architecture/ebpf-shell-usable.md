@@ -141,7 +141,7 @@ Real systems do not always deliver events in a neat order. The processor intenti
 - `tty_write` may arrive before auth success
 - `tty_write` may arrive before shell exec is observed
 - auth success may arrive after the session's child PIDs have already exited
-- fork tracepoint `comm` fields may be empty on Rocky, so parent PID plus accept FIFO is treated as the source of truth
+- a fork event carries the forking process's `comm` (the child has not exec'd yet), not the session's identity, so parent PID plus accept FIFO is treated as the source of truth
 
 Because of that, the processor buffers partial state and finalizes later instead of failing immediately.
 
