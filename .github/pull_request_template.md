@@ -10,6 +10,6 @@
 
 - [ ] `make check` passes
 - [ ] Tests cover the behaviour change (fuzz targets extended for parser changes)
-- [ ] README.md / AGENTS.md updated where flags, metrics or commands changed
+- [ ] README.md updated where flags or metrics changed; AGENTS.md where a rule or contract changed
 - [ ] Public contracts (metric names, labels, buckets, flags, input formats, BPF event layout) are unchanged, or the change is called out above
 - [ ] AI-assisted changes were reviewed by a human

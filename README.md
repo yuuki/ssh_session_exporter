@@ -186,9 +186,8 @@ On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it aga
 ## For Developers
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to propose changes, and
-[AGENTS.md](AGENTS.md) lists every build, test and lint command, the
-architecture and the compatibility contracts. `make check` is the local gate
-before a pull request. Security issues: see [SECURITY.md](SECURITY.md).
+[AGENTS.md](AGENTS.md) lists the compatibility contracts. `make check` is the
+local gate before a pull request. Security issues: see [SECURITY.md](SECURITY.md).
 
 ### Code Complexity
 

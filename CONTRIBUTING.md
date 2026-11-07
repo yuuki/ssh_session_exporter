@@ -19,10 +19,9 @@ Bug reports, ideas and pull requests are welcome.
    you touched, also run `make test-fuzz`, `make test-e2e` (Docker) or
    `make test-bpf` (root).
 4. Update README.md when flags or metrics change.
-5. Use short scoped commit subjects, such as `fix: ...`, `feat: ...`,
-   `ci: ...`, `docs: ...` or `refactor(collector): ...`, with the reason in the
-   body.
+5. Commits, branches and pull request titles follow the Git conventions in
+   [AGENTS.md](AGENTS.md).
 
-[AGENTS.md](AGENTS.md) has the full list of commands, the architecture, and
-the contracts and conventions that reviews check; it applies to AI-assisted
-changes too, which a human must review before they are merged.
+[AGENTS.md](AGENTS.md) has the contracts and conventions that reviews check;
+it applies to AI-assisted changes too, which a human must review before they
+are merged.
