@@ -1,7 +1,11 @@
 package collector
 
 import (
+	"fmt"
+	"math/rand/v2"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -246,5 +250,149 @@ func TestCorrelator_CleanupEvictsOnlyTheExpiredHeadOfEachQueue(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.pendingSessions, wantPending) {
 		t.Errorf("pendingSessions = %+v, want %+v", c.pendingSessions, wantPending)
+	}
+}
+
+func TestCorrelator_MatchOrParkSession(t *testing.T) {
+	c := newSessionCorrelator(5 * time.Minute)
+	acceptTime := time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)
+	loginTime := acceptTime.Add(2 * time.Second)
+
+	// Accept first: the session takes it and nothing stays queued.
+	c.RecordAccept(1001, "alice", "192.168.1.10", acceptTime)
+	got, ok := c.MatchOrParkSession("alice", "192.168.1.10", loginTime)
+	if !ok || !got.Equal(acceptTime) {
+		t.Errorf("MatchOrParkSession = %v, %v; want %v, true", got, ok, acceptTime)
+	}
+	if len(c.accepts) != 0 || len(c.pendingSessions) != 0 {
+		t.Fatalf("queues not empty: accepts %+v, pending %+v", c.accepts, c.pendingSessions)
+	}
+
+	// Session first: it is parked and the next accept resolves it.
+	if _, ok := c.MatchOrParkSession("alice", "192.168.1.10", loginTime); ok {
+		t.Fatal("MatchOrParkSession matched without a recorded accept")
+	}
+	_, setup := c.RecordAccept(1002, "alice", "192.168.1.10", acceptTime)
+	if setup == nil || setup.User != "alice" || setup.Duration != 2*time.Second {
+		t.Errorf("setup = %+v, want alice 2s", setup)
+	}
+	if len(c.accepts) != 0 || len(c.pendingSessions) != 0 {
+		t.Errorf("queues not empty: accepts %+v, pending %+v", c.accepts, c.pendingSessions)
+	}
+}
+
+// checkNotBothQueued fails if a key has both an accept and a pending session
+// queued (they should have matched each other), or keeps an empty queue.
+func checkNotBothQueued(t *testing.T, c *sessionCorrelator) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, q := range c.accepts {
+		if len(q) == 0 {
+			t.Errorf("%v: empty accept queue left in the map", key)
+		}
+		if n := len(c.pendingSessions[key]); n > 0 {
+			t.Errorf("%v: %d accepts and %d pending sessions queued together", key, len(q), n)
+		}
+	}
+	for key, q := range c.pendingSessions {
+		if len(q) == 0 {
+			t.Errorf("%v: empty pending session queue left in the map", key)
+		}
+	}
+}
+
+// TestCorrelator_RandomSequencesNeverQueueBothSides drives random sequences
+// of RecordAccept and MatchOrParkSession over a few keys and checks the
+// results against a FIFO model, and the invariant after every call.
+func TestCorrelator_RandomSequencesNeverQueueBothSides(t *testing.T) {
+	keys := []correlationKey{{"alice", "10.0.0.1"}, {"alice", "10.0.0.2"}, {"bob", "10.0.0.1"}}
+	base := time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)
+	for seed := range uint64(50) {
+		rng := rand.New(rand.NewPCG(seed, 0))
+		c := newSessionCorrelator(5 * time.Minute)
+		// Per key, at most one of the two model queues is non-empty.
+		modelAccepts := map[correlationKey][]time.Time{}
+		modelSessions := map[correlationKey][]time.Time{}
+		for step := range 200 {
+			key := keys[rng.IntN(len(keys))]
+			// Random times, so that some accepts come after their session.
+			ts := base.Add(time.Duration(rng.IntN(20)) * time.Second)
+			if rng.IntN(2) == 0 {
+				_, setup := c.RecordAccept(int32(step), key.user, key.remoteIP, ts)
+				var want *SetupResult
+				if q := modelSessions[key]; len(q) > 0 {
+					if d := q[0].Sub(ts); d >= 0 {
+						want = &SetupResult{User: key.user, Duration: d}
+					}
+					modelSessions[key] = q[1:]
+				} else {
+					modelAccepts[key] = append(modelAccepts[key], ts)
+				}
+				if !reflect.DeepEqual(setup, want) {
+					t.Fatalf("seed %d step %d: RecordAccept(%v, %v) setup = %+v, want %+v", seed, step, key, ts, setup, want)
+				}
+			} else {
+				got, ok := c.MatchOrParkSession(key.user, key.remoteIP, ts)
+				var want time.Time
+				wantOK := len(modelAccepts[key]) > 0
+				if wantOK {
+					want = modelAccepts[key][0]
+					modelAccepts[key] = modelAccepts[key][1:]
+				} else {
+					modelSessions[key] = append(modelSessions[key], ts)
+				}
+				if ok != wantOK || !got.Equal(want) {
+					t.Fatalf("seed %d step %d: MatchOrParkSession(%v, %v) = %v, %v; want %v, %v", seed, step, key, ts, got, ok, want, wantOK)
+				}
+			}
+			checkNotBothQueued(t, c)
+			if t.Failed() {
+				t.Fatalf("seed %d step %d: invariant broken", seed, step)
+			}
+		}
+	}
+}
+
+// TestCorrelator_ConcurrentAcceptsAndSessions runs auth log accepts and utmp
+// sessions for the same keys concurrently, as Run and Collect do. With as
+// many accepts as sessions per key, every one of them must find its match.
+func TestCorrelator_ConcurrentAcceptsAndSessions(t *testing.T) {
+	const keys, perKey = 64, 500
+	c := newSessionCorrelator(5 * time.Minute)
+	acceptTime := time.Now()
+	loginTime := acceptTime.Add(time.Second) // never a negative duration
+
+	var matched atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for k := range keys {
+		user, ip := fmt.Sprintf("user%d", k), "10.0.0.1"
+		wg.Go(func() {
+			<-start
+			for i := range perKey {
+				if _, setup := c.RecordAccept(int32(k*perKey+i), user, ip, acceptTime); setup != nil {
+					matched.Add(1)
+				}
+			}
+		})
+		wg.Go(func() {
+			<-start
+			for range perKey {
+				if _, ok := c.MatchOrParkSession(user, ip, loginTime); ok {
+					matched.Add(1)
+				}
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	checkNotBothQueued(t, c)
+	if got := matched.Load(); got != keys*perKey {
+		t.Errorf("matched %d accept/session pairs, want %d", got, keys*perKey)
+	}
+	if len(c.accepts) != 0 || len(c.pendingSessions) != 0 {
+		t.Errorf("unmatched entries left: %d accept keys, %d pending session keys", len(c.accepts), len(c.pendingSessions))
 	}
 }

@@ -166,14 +166,13 @@ func (c *SSHCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for _, newS := range delta.NewSessions {
 		c.connections.WithLabelValues(newS.User, newS.Host).Inc()
-		if acceptTime, ok := c.correlator.ConsumeAccept(newS.User, newS.Host); ok {
+		// Without a recorded accept the session is parked so that Run()
+		// can resolve it when the accept arrives.
+		if acceptTime, ok := c.correlator.MatchOrParkSession(newS.User, newS.Host, newS.LoginTime); ok {
 			setupDuration := newS.LoginTime.Sub(acceptTime)
 			if setupDuration >= 0 {
 				c.loginSetup.WithLabelValues(newS.User).Observe(setupDuration.Seconds())
 			}
-		} else {
-			// Accept hasn't arrived yet; park session so Run() can resolve it later.
-			c.correlator.RecordNewSession(newS.User, newS.Host, newS.LoginTime)
 		}
 	}
 
