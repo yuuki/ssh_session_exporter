@@ -10,8 +10,10 @@ Prometheus exporter for SSH session and authentication monitoring on Linux serve
 ## Installation
 
 ```bash
-go install github.com/yuuki/ssh_session_exporter/cmd/ssh_session_exporter@latest
+go install github.com/yuuki/ssh_session_exporter@latest
 ```
+
+The exporter is Linux-only; on another OS, prefix the command with `GOOS=linux`.
 
 Or build from source:
 
@@ -128,7 +130,7 @@ The eBPF latency histograms also include `remote_ip`, which can create a large n
 - `ssh_accept_to_shell_usable_seconds` uses the first PTY write as the "shell usable" proxy. This is close to user-perceived readiness, but it is not a literal prompt-render timestamp.
 - If the eBPF probe fails to attach, the exporter continues to expose the existing auth-log and utmp metrics, and `ssh_exporter_ebpf_shell_usable_up` remains `0`.
 
-For a deeper architecture walkthrough of the eBPF path, see [docs/architecture/ebpf-shell-usable.md](/Users/y-tsubouchi/src/github.com/yuuki/ssh_sesshon_exporter/docs/architecture/ebpf-shell-usable.md).
+For a deeper architecture walkthrough of the eBPF path, see [docs/architecture/ebpf-shell-usable.md](docs/architecture/ebpf-shell-usable.md).
 
 ### Limitations of utmp-based event detection
 
@@ -183,6 +185,11 @@ On each Prometheus scrape, `Collect()` reads a fresh utmp snapshot, diffs it aga
 
 ## For Developers
 
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to propose changes, and
+[AGENTS.md](AGENTS.md) lists every build, test and lint command, the
+architecture and the compatibility contracts. `make check` is the local gate
+before a pull request. Security issues: see [SECURITY.md](SECURITY.md).
+
 ### Code Complexity
 
 CI measures Cognitive and Cyclomatic Complexity with
@@ -205,11 +212,10 @@ and run `make complexity`, which ranks the most complex functions.
 Releases are triggered by pushing a semver tag. GitHub Actions builds binaries for four architectures and publishes them as a GitHub Release automatically.
 
 ```bash
-# 1. Ensure main is clean and tests pass
+# 1. Ensure main is clean and the checks pass
 git checkout main
 git pull
-make test
-make vet
+make check
 
 # 2. Create and push a tag
 git tag v1.2.3

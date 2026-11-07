@@ -37,7 +37,7 @@ var (
 
 func parsePID(s string) int32 {
 	n, _ := strconv.Atoi(s)
-	return int32(n)
+	return int32(n) //nolint:gosec // G109: real PIDs stay below pid_max (2^22); a forged larger one only mislabels its own line
 }
 
 var reTimestamp = regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})`)
@@ -73,6 +73,10 @@ func ParseLine(line string) *AuthEvent {
 	if !strings.Contains(line, "sshd") {
 		return nil
 	}
+	// The fields become Prometheus label values, which must be valid UTF-8
+	// (WithLabelValues panics otherwise). sshd escapes what it logs, but any
+	// local user can write to the auth log through syslog(3).
+	line = strings.ToValidUTF8(line, "\uFFFD")
 
 	if m := reFailedAuth.FindStringSubmatch(line); m != nil {
 		return &AuthEvent{

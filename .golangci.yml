@@ -1,0 +1,43 @@
+# golangci-lint v2 configuration. The version is pinned in the Makefile
+# (GOLANGCI_LINT_VERSION) and in .github/workflows/ci.yml; bump them together.
+version: "2"
+
+run:
+  # main, utmp's FileReader and the eBPF probe are Linux-only; lint them as
+  # the target platform sees them. Set GOOS=linux on other hosts.
+  build-tags:
+    - e2e
+    - e2e_rocky
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - nolintlint
+    - noctx
+    - unconvert
+    - usestdlibvars
+  settings:
+    gosec:
+      excludes:
+        # G104 (unchecked errors) duplicates errcheck, which already runs with
+        # the std-error-handling exclusions (Close and friends).
+        - G104
+  exclusions:
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck, noctx]
+      # The e2e suites drive docker, limactl and ssh against throwaway
+      # containers and VMs; they are test harnesses, not shipped code.
+      - path: ^e2e/
+        linters: [gosec, errcheck, noctx]
+
+formatters:
+  enable:
+    - gofmt

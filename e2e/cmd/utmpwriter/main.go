@@ -11,12 +11,13 @@ import (
 	"unsafe"
 )
 
+const userProcess int16 = 7
+
 const (
-	userProcess int16 = 7
-	utNameSize        = 32
-	utLineSize        = 32
-	utHostSize        = 256
-	utIDSize          = 4
+	utNameSize = 32
+	utLineSize = 32
+	utHostSize = 256
+	utIDSize   = 4
 )
 
 // rawRecord mirrors the Linux utmp struct (384 bytes on x86_64).
@@ -102,4 +103,3 @@ func writeRecords(path string) error {
 
 	return nil
 }
-
