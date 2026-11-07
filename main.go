@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/yuuki/ssh_session_exporter/authlog"
@@ -27,6 +28,9 @@ import (
 var version = "dev"
 
 const defaultAuthLogPath = "/var/log/auth.log"
+
+// readHeaderTimeout is far above what a scraper needs to send its headers.
+const readHeaderTimeout = 10 * time.Second
 
 var defaultAuthLogCandidates = []string{
 	defaultAuthLogPath,
@@ -77,8 +81,8 @@ func main() {
 
 	// Prometheus registry.
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(prometheus.NewGoCollector())
-	reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	sshCollector, err := collector.New(reg, utmpReader, tracker, logger)
 	if err != nil {
@@ -113,6 +117,9 @@ func main() {
 	server := &http.Server{
 		Addr:    *listenAddress,
 		Handler: mux,
+		// Bound how long a client may take to send its request headers, so
+		// that slow clients cannot hold connections open indefinitely.
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	go func() {

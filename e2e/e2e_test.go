@@ -280,7 +280,7 @@ func truncate(s string, n int) string {
 // separately-registered CounterVec/HistogramVec).
 func triggerAndScrape(t *testing.T) string {
 	t.Helper()
-	scrapeMetrics(t) // trigger: SSHCollector updates counters
+	scrapeMetrics(t)        // trigger: SSHCollector updates counters
 	return scrapeMetrics(t) // capture: CounterVec reports updated values
 }
 
@@ -451,7 +451,7 @@ func TestE2E(t *testing.T) {
 
 	t.Run("LoginSetup_AcceptFirst", func(t *testing.T) {
 		// Accept log line arrives first (sshd PID 7001).
-		appendAuthLog(t, fmt.Sprintf("Mar 27 12:06:00 server sshd[7001]: Accepted publickey for dave from 10.0.0.70 port 22 ssh2"))
+		appendAuthLog(t, "Mar 27 12:06:00 server sshd[7001]: Accepted publickey for dave from 10.0.0.70 port 22 ssh2")
 
 		// Wait for auth log ingestion.
 		time.Sleep(500 * time.Millisecond)

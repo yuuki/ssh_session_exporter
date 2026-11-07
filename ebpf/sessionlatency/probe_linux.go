@@ -36,6 +36,8 @@ type Probe struct {
 	closeOnce sync.Once
 }
 
+// rawEvent mirrors struct event in bpf/probe.c. binary.Read adds no padding,
+// so the 4 bytes that the C compiler inserts to align ts_ns are spelled out.
 type rawEvent struct {
 	Kind       uint8
 	Family     uint8
@@ -44,6 +46,7 @@ type rawEvent struct {
 	PPID       uint32
 	UID        uint32
 	Bytes      uint32
+	_          uint32 // C alignment padding before ts_ns
 	TSNs       uint64
 	Addr       [16]byte
 	Comm       [16]byte
@@ -67,7 +70,7 @@ func newMonotonicConverter() (monotonicConverter, error) {
 }
 
 func (c monotonicConverter) Time(ns uint64) time.Time {
-	return c.baseWall.Add(time.Duration(int64(ns) - c.baseMonoNs))
+	return c.baseWall.Add(time.Duration(int64(ns) - c.baseMonoNs)) //nolint:gosec // G115: CLOCK_MONOTONIC ns fit in int64 for 292 years of uptime
 }
 
 func Start(ctx context.Context, reg prometheus.Registerer, logger *slog.Logger, opts Options) (*Probe, error) {
@@ -234,8 +237,8 @@ func (p *Probe) runRingbuf() {
 func (p *Probe) convertRawEvent(raw rawEvent) traceEvent {
 	return traceEvent{
 		Kind:       traceEventKind(raw.Kind),
-		PID:        int32(raw.PID),
-		ParentPID:  int32(raw.PPID),
+		PID:        int32(raw.PID),  //nolint:gosec // G115: the kernel pid_t is an int32 carried as __u32
+		ParentPID:  int32(raw.PPID), //nolint:gosec // G115: as above
 		UID:        raw.UID,
 		Comm:       cString(raw.Comm[:]),
 		ParentComm: cString(raw.ParentComm[:]),

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -56,11 +58,24 @@ type rawRecordTime64 struct {
 	_       [4]byte
 }
 
+// nativeTime64 reports whether this platform's glibc lays out struct utmp
+// with a 64-bit ut_session and struct timeval (400 bytes). 64-bit platforms
+// that keep a 32-bit compatible layout (__WORDSIZE_TIME64_COMPAT32, such as
+// x86_64) and 32-bit platforms use the 384-byte layout.
+var nativeTime64 = runtime.GOARCH == "arm64" || runtime.GOARCH == "riscv64" || runtime.GOARCH == "loong64"
+
 // parseRecords parses raw utmp binary data into SSH sessions.
 func parseRecords(data []byte) ([]Session, error) {
 	switch {
 	case len(data) == 0:
 		return nil, nil
+	case len(data)%recordSizeTime64 == 0 && len(data)%recordSize == 0:
+		// A multiple of 9600 bytes fits both layouts (25 records of 384
+		// bytes are 24 of 400); only the native one is right.
+		if nativeTime64 {
+			return parseRecordsTime64(data)
+		}
+		return parseRecords32(data)
 	case len(data)%recordSizeTime64 == 0:
 		return parseRecordsTime64(data)
 	case len(data)%recordSize == 0:
@@ -132,10 +147,13 @@ func appendSessionTime64(sessions []Session, rec rawRecordTime64) []Session {
 	})
 }
 
-// cString extracts a null-terminated string from a byte slice.
+// cString extracts a null-terminated string from a byte slice. Invalid UTF-8
+// is replaced, because the fields become Prometheus label values, which must
+// be valid UTF-8, and utmp is not only written by sshd (libutempter lets
+// local users record a host of their choice).
 func cString(b []byte) string {
 	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return string(b[:i])
+		b = b[:i]
 	}
-	return string(b)
+	return strings.ToValidUTF8(string(b), "\uFFFD")
 }

@@ -2,7 +2,13 @@
 
 package main
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/yuuki/ssh_session_exporter/authlog"
+)
 
 func TestResolveAuthLogPath_DefaultPathExists(t *testing.T) {
 	path, ok := resolveAuthLogPath(defaultAuthLogPath, false, defaultAuthLogCandidates, func(path string) bool {
@@ -51,5 +57,46 @@ func TestResolveAuthLogPath_UsesExplicitPathAsIs(t *testing.T) {
 	}
 	if path != customPath {
 		t.Fatalf("expected explicit path %q, got %q", customPath, path)
+	}
+}
+
+func TestFanOutAuthEvents_ForwardsAndClosesWhenSourceCloses(t *testing.T) {
+	src := make(chan authlog.AuthEvent, 2)
+	out := make(chan authlog.AuthEvent, 2)
+	src <- authlog.AuthEvent{Type: authlog.EventInvalidUser, User: "admin"}
+	src <- authlog.AuthEvent{Type: authlog.EventAuthSuccess, User: "alice"}
+	close(src)
+
+	fanOutAuthEvents(context.Background(), src, out, nil)
+
+	var users []string
+	for e := range out { // fanOutAuthEvents closed out, or this would block
+		users = append(users, e.User)
+	}
+	if len(users) != 2 || users[0] != "admin" || users[1] != "alice" {
+		t.Fatalf("forwarded %v, want [admin alice] in order", users)
+	}
+}
+
+func TestFanOutAuthEvents_ReturnsOnCancelWhileConsumerIsStuck(t *testing.T) {
+	src := make(chan authlog.AuthEvent, 1)
+	src <- authlog.AuthEvent{Type: authlog.EventAuthFailure, User: "alice"}
+	out := make(chan authlog.AuthEvent) // nobody receives
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fanOutAuthEvents(ctx, src, out, nil)
+	}()
+	time.Sleep(50 * time.Millisecond) // let it block on the send
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fanOutAuthEvents did not return after cancel")
+	}
+	if _, ok := <-out; ok {
+		t.Fatal("expected the collector channel to be closed")
 	}
 }

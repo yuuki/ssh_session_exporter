@@ -422,3 +422,21 @@ func TestFileWatcher_StopUnblocksPendingSend(t *testing.T) {
 		t.Errorf("expected exactly the %d buffered events before close, got %d", cap(events), received)
 	}
 }
+
+// main keeps a watcher whose Start failed and calls Stop on it at shutdown.
+func TestFileWatcher_StopAfterFailedStartReturns(t *testing.T) {
+	w := NewFileWatcher(filepath.Join(t.TempDir(), "missing.log"), slog.Default())
+	if err := w.Start(context.Background()); err == nil {
+		t.Fatal("expected Start to fail for a missing file")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		w.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop blocked after a failed Start")
+	}
+}

@@ -35,8 +35,13 @@ var (
 	)
 )
 
+// parsePID returns 0 for a PID that does not fit in 32 bits, like for an
+// unparsable one, instead of wrapping it around into another sshd's PID.
 func parsePID(s string) int32 {
-	n, _ := strconv.Atoi(s)
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0
+	}
 	return int32(n)
 }
 
@@ -73,6 +78,10 @@ func ParseLine(line string) *AuthEvent {
 	if !strings.Contains(line, "sshd") {
 		return nil
 	}
+	// The fields become Prometheus label values, which must be valid UTF-8
+	// (WithLabelValues panics otherwise). sshd escapes what it logs, but any
+	// local user can write to the auth log through syslog(3).
+	line = strings.ToValidUTF8(line, "\uFFFD")
 
 	if m := reFailedAuth.FindStringSubmatch(line); m != nil {
 		return &AuthEvent{

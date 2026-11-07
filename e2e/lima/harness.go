@@ -333,7 +333,7 @@ func (h *harness) WaitForGuestAcceptance(t *testing.T) error {
 			return err
 		}
 		if !strings.Contains(out, "Accepted publickey for probe") {
-			return errors.New("Accepted line not present yet")
+			return errors.New("auth log has no Accepted line for probe yet")
 		}
 		return nil
 	})

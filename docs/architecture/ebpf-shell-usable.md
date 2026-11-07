@@ -9,7 +9,7 @@ This document describes the optional eBPF-based architecture behind the interact
 - `ssh_shell_usable_failures_total`
 - `ssh_exporter_ebpf_shell_usable_up`
 
-The implementation lives in [ebpf/sessionlatency/probe_linux.go](/Users/y-tsubouchi/src/github.com/yuuki/ssh_sesshon_exporter/ebpf/sessionlatency/probe_linux.go), [ebpf/sessionlatency/processor.go](/Users/y-tsubouchi/src/github.com/yuuki/ssh_sesshon_exporter/ebpf/sessionlatency/processor.go), and [ebpf/sessionlatency/bpf/probe.c](/Users/y-tsubouchi/src/github.com/yuuki/ssh_sesshon_exporter/ebpf/sessionlatency/bpf/probe.c).
+The implementation lives in [ebpf/sessionlatency/probe_linux.go](../../ebpf/sessionlatency/probe_linux.go), [ebpf/sessionlatency/processor.go](../../ebpf/sessionlatency/processor.go), and [ebpf/sessionlatency/bpf/probe.c](../../ebpf/sessionlatency/bpf/probe.c).
 
 ## Scope
 

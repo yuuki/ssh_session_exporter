@@ -1,0 +1,2 @@
+go test fuzz v1
+string("sshd[0]: Failed 0 for 0 from \xad port 0")

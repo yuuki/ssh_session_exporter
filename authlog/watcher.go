@@ -55,13 +55,15 @@ func (w *FileWatcher) Start(ctx context.Context) error {
 func (w *FileWatcher) run(ctx context.Context, f *os.File, offset int64) {
 	defer w.wg.Done()
 	defer close(w.events)
-	defer f.Close()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	buf := make([]byte, 32*1024)
 	tail := tailState{f: f, offset: offset}
+	// Close the file being read when the watcher stops, which after a
+	// rotation is the reopened one rather than f.
+	defer func() { tail.f.Close() }()
 
 	for {
 		select {
