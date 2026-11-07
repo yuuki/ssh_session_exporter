@@ -35,9 +35,14 @@ var (
 	)
 )
 
+// parsePID returns 0 for a PID that does not fit in 32 bits, like for an
+// unparsable one, instead of wrapping it around into another sshd's PID.
 func parsePID(s string) int32 {
-	n, _ := strconv.Atoi(s)
-	return int32(n) //nolint:gosec // G109: real PIDs stay below pid_max (2^22); a forged larger one only mislabels its own line
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return int32(n)
 }
 
 var reTimestamp = regexp.MustCompile(`^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})`)

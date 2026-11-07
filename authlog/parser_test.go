@@ -27,6 +27,16 @@ func TestParseLine(t *testing.T) {
 			wantPID:  1234,
 		},
 		{
+			// 2^32+1234 must not wrap around into the PID of another sshd.
+			name:     "pid outside 32 bits",
+			line:     `Jan  1 12:00:00 server sshd[4294968530]: Failed password for alice from 192.168.1.10 port 22 ssh2`,
+			wantType: EventAuthFailure,
+			wantUser: "alice",
+			wantIP:   "192.168.1.10",
+			wantMeth: "password",
+			wantPID:  0,
+		},
+		{
 			name:     "failed password invalid user",
 			line:     `Jan  1 12:00:00 server sshd[1234]: Failed password for invalid user admin from 10.0.0.5 port 49876 ssh2`,
 			wantType: EventAuthFailure,
