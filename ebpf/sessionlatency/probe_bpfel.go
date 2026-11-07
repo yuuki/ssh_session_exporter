@@ -19,6 +19,27 @@ type probeAcceptArgs struct {
 	UpeerAddrlen  uint64
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	probeMapEvents                 = "events"
+	probeMapInflightAccepts        = "inflight_accepts"
+	probeMapInflightWrites         = "inflight_writes"
+	probeProgTraceEnterAccept      = "trace_enter_accept"
+	probeProgTraceEnterAccept4     = "trace_enter_accept4"
+	probeProgTraceEnterWrite       = "trace_enter_write"
+	probeProgTraceEnterWritev      = "trace_enter_writev"
+	probeProgTraceExitAccept       = "trace_exit_accept"
+	probeProgTraceExitAccept4      = "trace_exit_accept4"
+	probeProgTraceExitWrite        = "trace_exit_write"
+	probeProgTraceExitWritev       = "trace_exit_writev"
+	probeProgTraceSchedProcessExec = "trace_sched_process_exec"
+	probeProgTraceSchedProcessExit = "trace_sched_process_exit"
+	probeProgTraceSchedProcessFork = "trace_sched_process_fork"
+	probeProgTraceTtyWrite         = "trace_tty_write"
+)
+
 // loadProbe returns the embedded CollectionSpec for probe.
 func loadProbe() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_ProbeBytes)
@@ -39,7 +60,7 @@ func loadProbe() (*ebpf.CollectionSpec, error) {
 //	*probeMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadProbeObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadProbeObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadProbe()
 	if err != nil {
 		return err

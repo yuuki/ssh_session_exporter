@@ -58,30 +58,23 @@ struct trace_event_raw_sys_exit {
   long ret;
 };
 
+// The sched tracepoint contexts differ between kernels: RHEL 9 adds
+// common_preempt_lazy_count to the common fields, and newer kernels turn the
+// comm arrays of sched_process_fork into __data_loc strings. Fixed offsets
+// read the wrong fields there, or past the end of the context, which makes
+// the kernel refuse to attach the program (EACCES). These structs therefore
+// declare only the fields the programs read, under the kernel's own type and
+// field names, and preserve_access_index makes every access a CO-RE
+// relocation that the loader resolves against the running kernel's BTF.
 struct trace_event_raw_sched_process_fork {
-  __u16 common_type;
-  __u8 common_flags;
-  __u8 common_preempt_count;
-  __s32 common_pid;
-  __u8 common_preempt_lazy_count;
-  __u8 __pad[3];
-  char parent_comm[TASK_COMM_LEN];
   __s32 parent_pid;
-  char child_comm[TASK_COMM_LEN];
   __s32 child_pid;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_sched_process_exec {
-  __u16 common_type;
-  __u8 common_flags;
-  __u8 common_preempt_count;
-  __s32 common_pid;
-  __u8 common_preempt_lazy_count;
-  __u8 __pad[3];
-  __u32 filename_loc;
+  __u32 __data_loc_filename;
   __s32 pid;
-  __s32 old_pid;
-};
+} __attribute__((preserve_access_index));
 
 struct trace_event_raw_tty_write {
   __u16 common_type;
@@ -181,7 +174,7 @@ static __always_inline void submit_event(const struct event *src) {
 }
 
 static __always_inline void fill_comm_from_exec_filename(char dst[TASK_COMM_LEN], const struct trace_event_raw_sched_process_exec *ctx) {
-  __u16 offset = ctx->filename_loc & 0xffff;
+  __u16 offset = ctx->__data_loc_filename & 0xffff;
 
   if (offset == 0) {
     return;
@@ -257,8 +250,10 @@ int trace_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx) {
   ev.pid = ctx->child_pid;
   ev.ppid = ctx->parent_pid;
   ev.ts_ns = bpf_ktime_get_ns();
-  __builtin_memcpy(ev.comm, ctx->child_comm, sizeof(ev.comm));
-  __builtin_memcpy(ev.parent_comm, ctx->parent_comm, sizeof(ev.parent_comm));
+  // The tracepoint fires in the parent, and the child starts with the
+  // parent's comm, so both come from the current task.
+  bpf_get_current_comm(ev.parent_comm, sizeof(ev.parent_comm));
+  __builtin_memcpy(ev.comm, ev.parent_comm, sizeof(ev.comm));
   submit_event(&ev);
   return 0;
 }
