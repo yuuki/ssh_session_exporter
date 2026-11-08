@@ -1,9 +1,9 @@
 {
   "repository": "yuuki/ssh_session_exporter/complexity",
   "ref": "refs/heads/main",
-  "commit": "7c2bedce04ed0b4fcb9af6d4827e5a1fd91d98ba",
+  "commit": "a82578e668657e61aed0afbeb1a7ba43af6c1116",
   "base_ref": "refs/heads/main",
-  "timestamp": "2026-11-07T12:44:45.743612963Z",
+  "timestamp": "2026-11-08T04:20:35.899431236Z",
   "custom_metrics": [
     {
       "key": "code_complexity",
@@ -12,7 +12,7 @@
         {
           "key": "function_count",
           "name": "Function count",
-          "value": 90
+          "value": 93
         },
         {
           "key": "cognitive_sum",
@@ -37,7 +37,7 @@
         {
           "key": "cyclomatic_sum",
           "name": "Cyclomatic: total",
-          "value": 340
+          "value": 344
         },
         {
           "key": "cyclomatic_max",
