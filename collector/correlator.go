@@ -101,12 +101,42 @@ func (c *sessionCorrelator) RecordAccept(pid int32, user, remoteIP string, accep
 	return failCount, nil
 }
 
-// ConsumeAccept dequeues the oldest accept timestamp for {user, remoteIP}.
-// Returns false if no accept has been recorded.
-func (c *sessionCorrelator) ConsumeAccept(user, remoteIP string) (time.Time, bool) {
+// MatchOrParkSession resolves a new utmp session for {user, remoteIP}: it
+// dequeues the oldest recorded accept and returns its timestamp, or, when no
+// accept has been recorded, parks the session for RecordAccept to resolve.
+// Doing both under one lock keeps a concurrent RecordAccept from queueing its
+// accept between the lookup and the parking, which would leave an accept and
+// a pending session queued for the same key and mismatch the next of each.
+func (c *sessionCorrelator) MatchOrParkSession(user, remoteIP string, loginTime time.Time) (acceptTime time.Time, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := correlationKey{user, remoteIP}
+	if acceptTime, ok = c.consumeAcceptLocked(key); ok {
+		return acceptTime, true
+	}
+	c.parkSessionLocked(key, loginTime)
+	return time.Time{}, false
+}
+
+// ConsumeAccept dequeues the oldest accept timestamp for {user, remoteIP}.
+// Returns false if no accept has been recorded. Use MatchOrParkSession
+// instead of ConsumeAccept followed by RecordNewSession: the pair races with
+// RecordAccept.
+func (c *sessionCorrelator) ConsumeAccept(user, remoteIP string) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.consumeAcceptLocked(correlationKey{user, remoteIP})
+}
+
+// RecordNewSession parks a new utmp session whose accept hasn't arrived yet.
+// See ConsumeAccept: new sessions go through MatchOrParkSession.
+func (c *sessionCorrelator) RecordNewSession(user, remoteIP string, loginTime time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.parkSessionLocked(correlationKey{user, remoteIP}, loginTime)
+}
+
+func (c *sessionCorrelator) consumeAcceptLocked(key correlationKey) (time.Time, bool) {
 	queue := c.accepts[key]
 	if len(queue) == 0 {
 		return time.Time{}, false
@@ -120,11 +150,7 @@ func (c *sessionCorrelator) ConsumeAccept(user, remoteIP string) (time.Time, boo
 	return entry.timestamp, true
 }
 
-// RecordNewSession parks a new utmp session whose accept hasn't arrived yet.
-func (c *sessionCorrelator) RecordNewSession(user, remoteIP string, loginTime time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := correlationKey{user, remoteIP}
+func (c *sessionCorrelator) parkSessionLocked(key correlationKey, loginTime time.Time) {
 	c.pendingSessions[key] = append(c.pendingSessions[key], pendingSessionEntry{loginTime: loginTime})
 }
 
