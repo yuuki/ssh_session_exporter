@@ -5,16 +5,17 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -X main.version=$(VERSION)
 
 # Tool versions. CI pins the same versions (.github/workflows); bump together.
-GOLANGCI_LINT_VERSION ?= v2.15.0
-GOVULNCHECK_VERSION   ?= v1.9.0
-ACTIONLINT_VERSION    ?= v1.7.12
-ZIZMOR_VERSION        ?= 1.32.0
-FUZZTIME              ?= 30s
-FUZZFLAGS             ?=
-BENCH_COUNT           ?= 6
-BENCHTIME             ?= 1s
+GOLANGCI_LINT_VERSION   ?= v2.15.0
+GOVULNCHECK_VERSION     ?= v1.9.0
+ACTIONLINT_VERSION      ?= v1.7.12
+ZIZMOR_VERSION          ?= 1.32.0
+GH_ACTIONS_LOCK_VERSION ?= v0.4.1
+FUZZTIME                ?= 30s
+FUZZFLAGS               ?=
+BENCH_COUNT             ?= 6
+BENCHTIME               ?= 1s
 # The privileged eBPF tests fail instead of skipping unless this is empty.
-BPF_REQUIRE           ?= 1
+BPF_REQUIRE             ?= 1
 
 # Build the Go tools with this module's toolchain (go env GOVERSION resolves
 # go.mod's): golangci-lint refuses a module that targets a newer Go than the
@@ -31,9 +32,11 @@ GOVULNCHECK   ?= $(GO_TOOL_LINUX) golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHEC
 ACTIONLINT    ?= $(GO_TOOL) github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 # uvx or pipx (preinstalled on GitHub-hosted runners) runs the pinned zizmor.
 ZIZMOR ?= $(if $(shell command -v uvx 2>/dev/null),uvx zizmor@$(ZIZMOR_VERSION),pipx run zizmor==$(ZIZMOR_VERSION))
+# gh-actions-lock (the `gh actions-lock` extension) runs through `go run` too.
+GH_ACTIONS_LOCK ?= $(GO_TOOL) github.com/github/gh-actions-lock/cmd/gh-actions-lock@$(GH_ACTIONS_LOCK_VERSION)
 
 .PHONY: build test vet complexity clean install test-e2e test-e2e-rocky \
-	check lint fmt lint-actions test-race test-fuzz test-bpf test-integration \
+	check lint fmt lint-actions lock-actions test-race test-fuzz test-bpf test-integration \
 	bench vuln generate-bpf
 
 build:
@@ -58,9 +61,17 @@ fmt:
 
 # Lint (actionlint) and audit (zizmor) the GitHub Actions workflows. Without
 # GH_TOKEN zizmor skips the audits that need the GitHub API.
+# gh-actions-lock checks that .github/workflows/actions.lock pins every
+# action the workflows use; with GH_TOKEN it also verifies each pin upstream.
 lint-actions:
 	$(ACTIONLINT)
 	$(ZIZMOR) $(if $(GH_TOKEN),,--offline) .
+	$(GH_ACTIONS_LOCK) $(if $(GH_TOKEN),--verify,--verify-local)
+
+# Pin the actions in .github/workflows/actions.lock after a `uses:` changed,
+# then review the diff. Needs a GitHub token (GH_TOKEN or `gh auth login`).
+lock-actions:
+	$(GH_ACTIONS_LOCK)
 
 test-race:
 	go test -race ./...
