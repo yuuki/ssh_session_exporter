@@ -1,13 +1,13 @@
 module github.com/yuuki/ssh_session_exporter
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/cilium/ebpf v0.22.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	go.uber.org/goleak v1.3.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
