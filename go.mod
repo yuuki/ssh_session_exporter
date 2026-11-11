@@ -1,6 +1,6 @@
 module github.com/yuuki/ssh_session_exporter
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/cilium/ebpf v0.22.0
