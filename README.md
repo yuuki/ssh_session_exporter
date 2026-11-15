@@ -1,5 +1,7 @@
 # SSH Session Exporter
 
+[![CI](https://github.com/yuuki/ssh_session_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/yuuki/ssh_session_exporter/actions/workflows/ci.yml)
+[![Security](https://github.com/yuuki/ssh_session_exporter/actions/workflows/security.yml/badge.svg)](https://github.com/yuuki/ssh_session_exporter/actions/workflows/security.yml)
 [![AI Generated](https://img.shields.io/badge/AI%20Generated-Claude-orange?logo=anthropic)](https://claude.ai/claude-code)
 [![License](https://img.shields.io/github/license/yuuki/ssh_session_exporter)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/yuuki/ssh_session_exporter)](https://github.com/yuuki/ssh_session_exporter/releases)
